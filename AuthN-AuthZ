@@ -25,9 +25,6 @@ Resulting risks
 	• Privilege escalation
 	• Business logic abuse
 
--> Interview insight:
-This question tests whether you think in resource-level access, not login flows.
-
 Q2. Why is session-based authentication called stateful?
 Ans:
 	• The server remembers you between requests.
@@ -53,9 +50,6 @@ Ans:
 	• Logout not actually killing access
 	• Shared session store compromise
 
--> Interview insight:
-Statefulness increases operational and security complexity, not safety.
-
 Q3. Are JWT-based systems really stateless?
 Ans:
 	• JWTs can be stateless, but secure systems rarely are.
@@ -78,9 +72,6 @@ So teams add:
 -> Common trap:
 “JWT means no server-side state.”
 That’s theoretical, not practical.
-
--> Interview insight:
-This tests your understanding of security vs scalability trade-offs.
 
 Q4. Why are access tokens short-lived and refresh tokens long-lived?
 Ans:
@@ -105,9 +96,6 @@ Ans:
 -> Risk if done wrong:
 	• Long-lived access tokens = silent account takeover
 
--> Interview insight:
-This checks whether you understand blast radius reduction.
-
 Q5. How does “Remember Me” work securely?
 Ans: 
 	• It’s long-term authentication, not convenience.
@@ -130,9 +118,6 @@ Ans:
 
 -> Resulting risk:
 	• Attacker keeps access for months without detection
-
--> Interview insight:
-This tests whether you treat convenience features as high-risk auth paths.
 
 Q6. Where should authorization be enforced: frontend, API gateway, or backend service?
 Ans:
@@ -161,9 +146,6 @@ Authorization must be enforced where the data and action actually live.
 	• Gateway allows request
 	• Backend blindly executes
 
--> Interview insight
-This tests whether you understand trust boundaries.
-
 Q7. What is object-level authorization and why is it critical?
 Ans:
 It ensures users can only access their own data, not just “some data”.
@@ -181,9 +163,6 @@ It ensures users can only access their own data, not just “some data”.
 -> Vulnerability if missed:
 	• IDOR (Insecure Direct Object Reference)
 	• One of the most common real-world breaches.
-
--> Interview insight:
-This question filters engineers who think beyond roles.
 
 Q8. What is the difference between role-based and attribute-based access control?
 Ans:
@@ -210,9 +189,6 @@ Ans:
 	• ABAC = powerful but complex
 	• Requires good policy design
 
--> Interview insight:
-This tests design maturity, not tool knowledge.
-
 Q9. How does multi-tenant authorization differ from single-tenant authorization?
 Ans:
 In multi-tenant systems, tenant isolation is as important as user permissions.
@@ -231,9 +207,6 @@ In multi-tenant systems, tenant isolation is as important as user permissions.
 -> Resulting risks:
 	• Cross-tenant data leakage
 	• Regulatory and contractual violations
-
--> Interview insight:
-This tests your ability to reason about enterprise-scale systems.
 
 Q10. How do you design authorization so that it’s hard to bypass?
 Ans:
@@ -257,5 +230,18 @@ Good systems:
 	• “We’ll add checks later”
 	• “The gateway already handles it”
 
--> Interview insight:
-This tests whether you design for long-term safety, not shortcuts.
+Summary:
+AuthN = identity
+AuthZ = permission
+Login ≠ access
+Token ≠ trust
+Stateless ≠ secure
+Convenience ≠ low risk
+Frontend = UX
+Gateway = coarse filter
+Backend = authority
+Roles ≠ ownership
+RBAC ≠ scalable forever
+Tenant isolation ≠ optional
+Authorization must be unavoidable
+
