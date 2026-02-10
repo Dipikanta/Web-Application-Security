@@ -1,0 +1,111 @@
+Q1. What is access control and why is it central to application security?
+Ans:
+Access control decides who can do what on which resource.
+Authentication answers who you are.
+Access control enforces what you’re allowed to do.
+
+-> What’s really happening:
+For every request, the system must evaluate:
+	• identity (user / service)
+	• action (read, write, delete)
+	• resource (object, record, API)
+	• context (tenant, state, business rules)
+This decision must happen before the action executes.
+
+-> Where systems fail:
+	• Access checks done only at:
+		○ UI
+		○ API gateway
+	• Backend trusts incoming identifiers blindly
+
+Q2. What is IDOR and why is it so common?
+Ans:
+IDOR happens when users can access other users’ data by changing an identifier.
+
+-> What’s really happening:
+	• Client sends a resource ID (orderId, userId)
+	• Backend:
+		○ fetches the object
+		○ does not verify ownership
+	• Any authenticated user can enumerate data
+
+-> Why it’s so common:
+	• Developers check authentication
+	• They forget object-level authorization
+	• IDs look random, so they “feel safe”
+
+-> Impact:
+	• Data leakage
+	• Account takeover paths
+	• Compliance violations
+
+Q3. Why are role-based checks alone insufficient for access control?
+Ans:
+Having the right role doesn’t mean you own the data.
+
+-> What’s really happening:
+	• Two users:
+		○ same role
+		○ different resources
+	• Role check passes
+	• Ownership check is missing
+Real-world example
+	• Both users are “customers”
+	• One accesses another customer’s order
+
+-> Correct approach:
+Access = role AND object relationship
+
+Q4. Where should access control be enforced in a system?
+Ans:
+Access control must be enforced close to the data.
+
+-> What’s really happening:
+	• Frontend:
+		○ improves UX
+		○ cannot be trusted
+	• API gateway:
+		○ enforces coarse rules
+		○ lacks business context
+	• Backend service:
+		○ knows:
+			- ownership
+			- tenant
+			- state
+			- business rules
+
+-> Correct design:
+	• Backend = final authority
+	• Gateway = defense in depth
+
+Q5. How do you prevent IDOR in practice?
+Ans:
+Never trust client-supplied identifiers.
+
+-> What’s really happening:
+For every request:
+	1. Identify the caller
+	2. Fetch the resource securely
+	3. Verify:
+		○ ownership or
+		○ explicit permission
+	4. Only then perform the action
+
+-> Good patterns:
+	• Query by:
+		○ resource ID + user ID
+	• Centralized authorization logic
+	• Deny by default
+
+-> Bad patterns:
+	• “If ID exists, return it”
+	• Security through obscurity (UUIDs)
+
+
+
+Summary :
+Auth ≠ Access
+Roles ≠ Ownership
+IDs ≠ Permission
+Backend ≠ Trustless
+
