@@ -1,0 +1,207 @@
+Q1. What is session management and why is it security-critical?
+Ans:
+Session management is how a system remembers who you are after you log in.
+Login happens once.
+Sessions decide everything after that.
+
+-> What’s really happening:
+	• After authentication:
+		○ system creates a session
+		○ assigns a session identifier (cookie / token)
+	• Every request:
+		○ session identifier is presented
+		○ server maps it back to identity + context
+
+-> Why this is security-critical:
+If an attacker controls the session, they control the user — even without knowing the password.
+
+-> What breaks in real systems
+	• Weak or predictable session IDs
+	• Sessions that never expire
+	• Sessions not invalidated on logout or password change
+
+Q2. What makes a session identifier secure?
+Ans:
+A session ID must be unguessable, protected, and short-lived.
+
+-> What’s really happening:
+A secure session identifier is:
+	• random (cryptographically strong)
+	• unique per session
+	• meaningless by itself (no embedded data)
+
+-> Required protections:
+	• Sent only over HTTPS
+	• Stored in secure cookies (HttpOnly, Secure)
+	• Rotated on:
+		○ login
+		○ privilege change
+
+-> Common mistakes:
+	• Encoding user ID in session ID
+	• Reusing session IDs
+	• Long-lived static identifiers
+
+Q3. What is session fixation and how does it happen?
+Ans:
+Session fixation happens when an attacker forces a victim to use a known session ID.
+
+-> What’s really happening:
+	1. Attacker obtains a valid session ID
+	2. Victim is tricked into using that session
+	3. Victim logs in
+	4. Session becomes authenticated — attacker already knows it
+
+-> Why this works:
+	• Session ID is not regenerated after login
+	• Server trusts the existing session
+
+-> Prevention:
+	• Always regenerate session ID after authentication
+	• Reject externally supplied session IDs
+
+Q4. How do XSS and CSRF relate to session management?
+Ans:
+	• XSS steals sessions
+	• CSRF abuses sessions
+
+-> What’s really happening:
+	• XSS:
+		○ attacker runs JavaScript
+		○ reads cookies or tokens
+		○ hijacks session
+	• CSRF:
+		○ browser auto-sends cookies
+		○ attacker triggers authenticated actions
+
+-> Why session handling matters:
+	• HttpOnly cookies reduce XSS impact
+	• SameSite cookies reduce CSRF risk
+	• Poor session design amplifies both attacks
+
+Q5. When and how should sessions be invalidated?
+Ans:
+Sessions must die when trust changes.
+
+-> When to invalidate:
+	• Logout
+	• Password change
+	• Privilege change
+	• Suspicious activity
+	• Device revocation
+
+-> What’s really happening:
+	• Server deletes or marks session invalid
+	• Tokens are revoked or expired
+	• New session required
+
+-> What goes wrong:
+	• Logout only clears client cookie
+	• Server session remains active
+	• Attacker keeps access
+
+Q6. Cookies vs tokens for session management — what’s the real difference?
+Ans:
+Cookies are automatically sent by the browser.
+Tokens are manually attached by the application.
+
+-> What’s really happening:
+	• Cookies:
+		○ browser manages them
+		○ sent on every matching request
+		○ vulnerable to CSRF if not configured
+	• Tokens (e.g., Bearer tokens):
+		○ stored and sent by app code
+		○ vulnerable to XSS if stored improperly
+
+-> Security trade-off:
+	• Cookies + HttpOnly + SameSite → safer against XSS
+	• Tokens in localStorage → high XSS risk
+
+Q7. What are Secure, HttpOnly, and SameSite cookie flags and why do they matter?
+Ans:
+Cookie flags limit how and when cookies can be abused.
+
+-> What’s really happening:
+	• Secure:
+		○ cookie sent only over HTTPS
+	• HttpOnly:
+		○ JavaScript cannot read the cookie
+	• SameSite:
+		○ restricts cross-site sending of cookies
+
+-> Why this is critical:
+	• Missing HttpOnly → session theft via XSS
+	• Missing SameSite → CSRF risk
+	• Missing Secure → session leakage over HTTP
+
+Q8. How should session timeouts be designed?
+Ans:
+Sessions should expire when trust fades.
+
+-> What’s really happening:
+Two types of timeouts:
+	• Absolute timeout:
+		○ max lifetime of session
+	• Idle timeout:
+		○ expires after inactivity
+Why both are needed
+	• Idle timeout → limits unattended sessions
+	• Absolute timeout → limits long-term abuse
+
+-> Common mistake:
+	• Only idle timeout
+	• Long-lived sessions that never truly die
+
+Q9. What is session rotation and when should it happen?
+Ans:
+Session rotation replaces an existing session with a new one.
+
+-> What’s really happening:
+	• New session ID is issued
+	• Old session is invalidated
+	• Identity and context are preserved
+
+-> When to rotate
+	• After login
+	• After privilege escalation
+	• After sensitive actions
+
+-> Why this matters
+	• Limits session fixation
+	• Limits stolen session reuse
+
+Q10. How do you handle sessions across multiple devices securely?
+Ans:
+Each device should have its own session.
+
+-> What’s really happening
+	• Server tracks:
+		○ session per device
+		○ metadata (IP, device, last seen)
+	• User can:
+		○ view active sessions
+		○ revoke specific devices
+
+-> Security benefits:
+	• Limits blast radius
+	• Improves detection of anomalies
+	• Enables forced logout
+
+-> Common failure:
+	• One global session for all devices
+
+Summary:
+Login is momentary.
+Sessions are persistent.
+If session is compromised, authentication no longer matters.
+XSS steals sessions.
+CSRF abuses sessions.
+Invalidation is non-negotiable.
+Cookies are automatic.
+Tokens are manual.
+Flags protect cookies.
+Rotation protects sessions.
+Timeouts limit trust.
+Devices should be isolated.
+
