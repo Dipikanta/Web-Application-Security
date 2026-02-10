@@ -1,1 +1,261 @@
+Q1. What is the difference between authentication and authorization?
+Ans:
+	• Authentication answers: Who are you?
+	• Authorization answers: What are you allowed to do?
+Logging in proves identity.
+Accessing data requires permission.
 
+-> What’s really happening:
+	• Authentication establishes an identity context (user, service, device).
+	• Authorization evaluates that identity against:
+		○ roles
+		○ policies
+		○ resource ownership
+		○ business rules
+They are separate decisions and must stay separate.
+
+-> Where systems fail:
+	• Teams assume “logged in” = “allowed”.
+	• Authorization is enforced only at:
+		○ UI
+		○ API gateway
+but not inside services.
+Resulting risks
+	• IDOR (accessing other users’ data)
+	• Privilege escalation
+	• Business logic abuse
+
+-> Interview insight:
+This question tests whether you think in resource-level access, not login flows.
+
+Q2. Why is session-based authentication called stateful?
+Ans:
+	• The server remembers you between requests.
+
+-> What’s really happening:
+	• After login:
+		○ server creates a session object
+		○ session ID is stored in a cookie
+	• Every request:
+		○ server looks up session state
+		○ retrieves user identity and attributes
+
+-> Why this matters:
+	• Server must:
+		○ store sessions
+		○ expire them
+		○ invalidate them
+		○ protect the session store
+
+-> Security risks:
+	• Session fixation
+	• Session hijacking
+	• Logout not actually killing access
+	• Shared session store compromise
+
+-> Interview insight:
+Statefulness increases operational and security complexity, not safety.
+
+Q3. Are JWT-based systems really stateless?
+Ans:
+	• JWTs can be stateless, but secure systems rarely are.
+
+-> What’s really happening:
+	• JWT contains identity + claims.
+	• Server verifies signature and trusts claims.
+
+-> Why stateless breaks down:
+Real systems need:
+	• logout
+	• token revocation
+	• device tracking
+	• anomaly detection
+So teams add:
+	• refresh token stores
+	• deny-lists
+	• token introspection
+
+-> Common trap:
+“JWT means no server-side state.”
+That’s theoretical, not practical.
+
+-> Interview insight:
+This tests your understanding of security vs scalability trade-offs.
+
+Q4. Why are access tokens short-lived and refresh tokens long-lived?
+Ans:
+	• Access tokens are exposed often.
+	• Refresh tokens are powerful but used rarely.
+
+-> What’s really happening:
+	• Access token:
+		○ sent on every request
+		○ likely to leak (logs, memory, XSS)
+	• Refresh token:
+		○ exchanged securely
+		○ used only to get new access tokens
+
+-> Secure storage:
+	• Web:
+		○ access token → memory
+		○ refresh token → HttpOnly Secure cookie
+	• Mobile:
+		○ refresh token → OS keystore
+
+-> Risk if done wrong:
+	• Long-lived access tokens = silent account takeover
+
+-> Interview insight:
+This checks whether you understand blast radius reduction.
+
+Q5. How does “Remember Me” work securely?
+Ans: 
+	• It’s long-term authentication, not convenience.
+
+-> What’s really happening:
+	• System issues:
+		○ random, persistent token
+		○ bound to device
+	• Server stores:
+		○ hashed token
+		○ expiry
+	• Token is:
+		○ rotated on use
+		○ revocable
+
+-> Common mistakes:
+	• Static token reused forever
+	• Stored in localStorage
+	• Not invalidated on password change
+
+-> Resulting risk:
+	• Attacker keeps access for months without detection
+
+-> Interview insight:
+This tests whether you treat convenience features as high-risk auth paths.
+
+Q6. Where should authorization be enforced: frontend, API gateway, or backend service?
+Ans:
+Authorization must be enforced where the data and action actually live.
+
+-> What’s really happening:
+	• Frontend:
+		○ controls UX only
+		○ cannot be trusted
+	• API gateway:
+		○ good for coarse checks (token valid, scope present)
+		○ not enough for business rules
+	• Backend service:
+		○ has full context:
+			- resource
+			- owner
+			- tenant
+			- business logic
+
+-> Correct design:
+	• Primary authorization → backend service
+	• Secondary checks → gateway (defense in depth)
+	• Never rely on frontend
+
+-> Common failure:
+	• Gateway allows request
+	• Backend blindly executes
+
+-> Interview insight
+This tests whether you understand trust boundaries.
+
+Q7. What is object-level authorization and why is it critical?
+Ans:
+It ensures users can only access their own data, not just “some data”.
+
+-> What’s really happening:
+	• Request includes:
+		○ resource ID (orderId, userId, fileId)
+	• Backend must check:
+		○ Does this resource belong to this identity?
+
+-> Why role checks are not enough:
+	• Two users may share the same role.
+	• Ownership is a separate condition.
+
+-> Vulnerability if missed:
+	• IDOR (Insecure Direct Object Reference)
+	• One of the most common real-world breaches.
+
+-> Interview insight:
+This question filters engineers who think beyond roles.
+
+Q8. What is the difference between role-based and attribute-based access control?
+Ans:
+	• RBAC: access based on roles.
+	• ABAC: access based on attributes + context.
+
+-> What’s really happening:
+	• RBAC:
+		○ simple
+		○ static
+		○ hard to scale
+	• ABAC:
+		○ uses:
+			- user attributes
+			- resource attributes
+			- environment (time, location)
+		○ more expressive
+
+-> Real systems:
+	• Start with RBAC
+	• Gradually evolve to ABAC or policy-based models
+
+-> Trade-off:
+	• ABAC = powerful but complex
+	• Requires good policy design
+
+-> Interview insight:
+This tests design maturity, not tool knowledge.
+
+Q9. How does multi-tenant authorization differ from single-tenant authorization?
+Ans:
+In multi-tenant systems, tenant isolation is as important as user permissions.
+
+-> What’s really happening:
+	• Every request must be evaluated against:
+		○ user identity
+		○ tenant identity
+	• Data access must be scoped to:
+		○ tenant_id + resource_id
+
+-> Common failure:
+	• Tenant ID passed from client
+	• Not validated server-side
+
+-> Resulting risks:
+	• Cross-tenant data leakage
+	• Regulatory and contractual violations
+
+-> Interview insight:
+This tests your ability to reason about enterprise-scale systems.
+
+Q10. How do you design authorization so that it’s hard to bypass?
+Ans:
+Authorization should be centralized, consistent, and unavoidable.
+
+-> What’s really happening:
+Good systems:
+	• enforce authZ:
+		○ inside service code
+		○ close to data access
+	• avoid:
+		○ scattered checks
+		○ copy-paste logic
+
+-> Design patterns:
+	• Policy engines
+	• Middleware/interceptors
+	• Explicit permission checks in domain logic
+
+-> Red flags:
+	• “We’ll add checks later”
+	• “The gateway already handles it”
+
+-> Interview insight:
+This tests whether you design for long-term safety, not shortcuts.
