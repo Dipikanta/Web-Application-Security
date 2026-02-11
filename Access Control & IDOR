@@ -101,6 +101,102 @@ For every request:
 	• “If ID exists, return it”
 	• Security through obscurity (UUIDs)
 
+Q6. How does IDOR appear in APIs even when IDs are not exposed directly?
+Ans:
+Hiding IDs does not prevent IDOR.
+
+-> What’s really happening:
+	• APIs often use:
+		○ indirect references
+		○ encoded IDs
+		○ UUIDs
+	• Backend still:
+		○ resolves the reference
+		○ fetches the object
+		○ skips ownership check
+
+-> Why this fails:
+	• Attackers don’t need to guess IDs
+	• They reuse:
+		○ previously seen references
+		○ references from logs, emails, URLs
+
+-> Correct mindset:
+Authorization, not obscurity, prevents IDOR.
+
+Q7. How does IDOR manifest in multi-tenant systems?
+Ans:
+IDOR becomes cross-tenant data leakage.
+
+-> What’s really happening:
+	• Requests include:
+		○ resource ID
+		○ sometimes tenant ID
+	• Backend:
+		○ trusts tenant ID from client
+		○ does not enforce tenant scoping
+Common failure
+	• Querying by:
+		○ resource ID only
+	• Not binding:
+		○ user → tenant → resource
+
+-> Correct pattern:
+Every access check must enforce:
+	• tenant isolation
+	• object ownership
+
+Q8. What is indirect object reference and how is it different from IDOR?
+Ans: 
+Indirect references change how objects are referenced, not how access is controlled.
+
+-> What’s really happening
+	• Direct reference:
+		○ /orders/123
+	• Indirect reference:
+		○ /orders/abcxyz
+	• Backend maps:
+		○ abcxyz → 123
+Key mistake
+	• Developers assume indirection = security
+	• Authorization checks are still missing
+Important truth
+Indirect references do not replace access control.
+
+Q9. How should access control be tested effectively?
+Ans:
+You test access control by breaking assumptions, not following happy paths.
+
+-> What’s really happening
+Effective testing includes:
+	• horizontal access attempts (peer data)
+	• vertical access attempts (privilege escalation)
+	• cross-tenant access
+What to look for
+	• Missing checks
+	• Inconsistent enforcement
+	• Partial protections
+Why automated tests miss this
+	• Tools don’t understand business context
+	• Human reasoning is required
+
+Q10. How do you design access control so it scales and stays correct?
+Ans:
+Access control should be centralized, explicit, and default-deny.
+
+-> What’s really happening:
+Good systems:
+	• define access rules clearly
+	• enforce them consistently
+	• avoid scattered logic
+Design principles
+	• One source of truth for authorization
+	• Explicit permission checks
+	• Fail closed, not open
+Red flags
+	• Copy-paste access checks
+	• “We’ll add it later”
+	• UI-based enforcement
 
 
 Summary :
@@ -108,4 +204,10 @@ Auth ≠ Access
 Roles ≠ Ownership
 IDs ≠ Permission
 Backend ≠ Trustless
+Obscurity ≠ Security
+Tenant ≠ User
+Reference ≠ Permission
+Testing breaks assumptions
+Default deny wins
+
 
