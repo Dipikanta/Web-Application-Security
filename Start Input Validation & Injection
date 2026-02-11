@@ -1,0 +1,212 @@
+Q1. What is input validation and why is it critical?
+Ans:
+Input validation ensures that data received by an application is safe and expected before processing.
+
+-> What’s really happening:
+Applications accept input from:
+Users
+Browsers
+APIs
+Other services
+Files
+Headers
+Query parameters
+-> If this input is:
+Unexpected
+Malformed
+Malicious
+And the system processes it blindly → injection happens.
+
+-> The core problem:
+Software trusts input more than it should.
+
+Q2. What is injection and why is it so dangerous?
+Ans:
+Injection happens when untrusted input becomes part of a command or query executed by the system.
+
+-> What’s really happening:
+Instead of being treated as data, user input becomes code.
+Example:
+SELECT * FROM users WHERE name = 'input'
+If input =
+' OR 1=1 --
+The query logic changes.
+The attacker is no longer just supplying data. They are modifying execution behavior.
+
+-> Why injection is dangerous:
+Data theft
+Authentication bypass
+Remote code execution
+Full system compromise
+Injection is often a system-level failure, not a small bug.
+
+Q3. What are the main types of injection vulnerabilities?
+Ans:
+Injection can occur anywhere input influences an interpreter.
+Common types
+1️⃣ SQL Injection : Database queries
+2️⃣ Command Injection: OS command execution
+3️⃣ NoSQL Injection: MongoDB, Elasticsearch queries
+4️⃣ LDAP Injection: Directory services
+5️⃣ Template Injection: Server-side template engines
+6️⃣ XPath / XML Injection
+
+-> Important pattern:
+Injection happens when:
+Input is concatenated into interpreter commands
+No strict separation exists between data and logic
+
+Q4. Why is blacklisting input a weak defense?
+Ans:
+Blocking known bad patterns is incomplete.
+
+-> What’s really happening:
+Developers try:
+Block '
+Block --
+Block ;
+
+Attackers:
+Encode input
+Use alternate syntax
+Exploit edge cases
+There are infinite malicious variations.
+
+-> Stronger approach
+Use:
+Allowlisting (only expected formats)
+Parameterized queries
+Strict parsing
+Security must rely on structure, not pattern guessing.
+
+Q5. What is the difference between input validation and output encoding?
+Ans:
+Input validation → ensure input is structurally valid
+Output encoding → ensure output is safely rendered in context
+
+-> Why this distinction matters:
+For example:
+Valid email format → input validation
+Escaping user data in HTML → output encoding
+They solve different problems.
+Input validation: protects backend logic
+Output encoding: prevents execution in browser context (XSS)
+Clear separation signals maturity.
+
+Q6. Why are parameterized queries the strongest defense against SQL injection?
+Ans:
+Parameterized queries ensure user input is treated strictly as data, never as executable SQL.
+
+->What’s really happening:
+Instead of string concatenation:
+"SELECT * FROM users WHERE name = '" + input + "'"
+We use:
+SELECT * FROM users WHERE name = ?
+The database:
+Parses SQL structure first
+Binds user input later
+Never reinterprets input as SQL logic
+Even if input is:
+' OR 1=1 --
+It is stored as literal string data — not executed.
+
+-> Why this works:
+It enforces structural separation between code and data.
+
+Q7. Why is command injection often more severe than SQL injection?
+Ans:
+Command injection executes operating system commands, not just database queries.
+
+-> What’s really happening:
+Example vulnerable code:
+ping $input
+If input:
+8.8.8.8; rm -rf /
+The system executes both commands.
+
+-> Why it’s more dangerous:
+Full server compromise
+File system access
+Reverse shell
+Privilege escalation
+
+SQL injection may expose data.
+Command injection may compromise the entire host.
+
+Q8. Why is deserialization considered a form of injection?
+Ans: 
+Deserialization vulnerabilities allow attackers to inject malicious objects into application memory.
+
+-> What’s really happening:
+Application:
+Accepts serialized object
+Converts it back into program object
+Automatically executes methods (like constructors)
+If attacker crafts malicious object:
+Code execution may occur
+Sensitive operations may trigger
+The injected content becomes:
+Executable behavior
+Not just data
+
+-> Why this is dangerous:
+Often leads to remote code execution
+Hard to detect
+Impacts internal systems
+
+Q9. Why is input validation alone insufficient to prevent injection?
+Ans:
+Validation checks format — but injection happens at execution time.
+
+-> What’s really happening:
+Even valid-looking input can:
+Change logic
+Trigger unexpected behavior
+Abuse business rules
+Example:
+Numeric ID is valid format
+But accessing another user’s ID is still abuse
+Or:
+Valid JSON format
+But contains malicious nested payload
+
+-> Secure design principle:
+Validation must be combined with:
+Context-aware encoding
+Safe APIs
+Least privilege execution
+
+Q10. How should injection defenses be designed at architecture level?
+Ans:
+Injection prevention should be built into frameworks, not left to developers manually.
+
+-> What’s really happening:
+Secure architecture includes:
+ORM enforcing parameterization
+No direct shell execution
+Strict templating engines
+Sandboxed execution
+Centralized input handling libraries
+
+-> Dangerous patterns:
+Custom SQL builders
+Dynamic string evaluation
+Eval-like functions
+Ad-hoc command execution
+
+-> Architectural mindset:
+Developers should have to try very hard to do something unsafe.
+Security by default > security by discipline.
+
+
+Summary:
+All input is untrusted
+Injection = data becomes code
+Blocklists fail
+Structure > patterns
+Validation ≠ encoding
+Code ≠ Data
+Structure > Filtering
+OS injection > DB injection (impact)
+Validation alone is insufficient
+Make safe behavior default
