@@ -1,0 +1,229 @@
+Q1. What is Cross-Site Scripting (XSS)?
+Ans: 
+XSS occurs when attacker-controlled input is executed as JavaScript in a victim’s browser.
+
+-> What’s really happening:
+Application:
+Accepts user input
+Stores or reflects it
+Renders it into HTML without proper encoding
+
+Browser:
+Parses HTML
+Executes embedded JavaScript automatically
+If attacker injects:
+<script>alert('Hacked')</script>
+The victim’s browser executes it.
+
+-> Why this is dangerous:
+Session hijacking
+Account takeover
+Token theft
+DOM manipulation
+Phishing
+Keylogging
+
+The server might be secure.
+The browser becomes the attack surface.
+XSS is a client-side injection vulnerability.
+
+Q2. What are the main types of XSS?
+1️⃣ Stored XSS
+Malicious script stored in database.
+Example:
+Attacker posts comment
+Script saved
+Every viewer executes it
+High impact. Persistent.
+
+2️⃣ Reflected XSS
+Input immediately reflected in response.
+Example:
+search?q=<script>...</script>
+Script executes when victim clicks crafted link.
+
+3️⃣ DOM-based XSS
+Vulnerability exists entirely in client-side JavaScript.
+Example:
+document.innerHTML = location.hash
+Server may not even see the payload.
+
+Q3. Why is XSS fundamentally a context problem?
+Ans:
+The same input is safe or dangerous depending on where it is rendered.
+Example
+Unsafe in HTML body:
+<div>USER_INPUT</div>
+
+Unsafe in attribute:
+<input value="USER_INPUT">
+
+Unsafe in JavaScript:
+var x = "USER_INPUT";
+
+Each context requires different encoding rules.
+
+-> Core lesson:
+XSS prevention is not about filtering.
+It’s about context-aware output encoding.
+
+Q4. Why is blacklisting <script> tags ineffective?
+Ans:
+JavaScript execution does not require <script> tags.
+Examples
+<img src=x onerror=alert(1)>
+<a href="javascript:alert(1)">
+Attackers:
+Use event handlers
+Abuse attributes
+Use encoding tricks
+Use nested contexts
+There are countless execution vectors.
+
+-> Secure principle:
+Don’t try to block bad input.
+Encode output properly.
+
+Q5. How does XSS lead to session hijacking?
+Ans:
+If JavaScript runs in a victim’s browser, it runs with their session privileges.
+
+-> What’s really happening:
+If cookies are: Not HttpOnly
+Attacker script can do: document.cookie
+And exfiltrate it.
+Or:
+Perform authenticated actions via fetch()
+Modify DOM
+Send API requests
+The browser trusts the script because it came from the application.
+
+-> Key idea:
+XSS = attacker gains victim’s browser identity.
+
+Q6. What is context-aware output encoding and why is it critical?
+Ans:
+Output must be encoded differently depending on where it is rendered.
+
+-> Why this matters:
+Browser parses differently in:
+1️⃣ HTML body
+2️⃣ HTML attribute
+3️⃣ JavaScript context
+4️⃣ URL context
+5️⃣ CSS context
+Each context has different escape rules.
+Example
+If rendering in HTML body:
+<div>{{userInput}}</div>
+Encode < → &lt;
+
+If rendering inside attribute:
+<input value="{{userInput}}">
+Must escape:
+Quotes
+Angle brackets
+Event handlers
+
+If rendering inside JavaScript:
+var data = "{{userInput}}";
+Must escape:
+Quotes
+Backslashes
+Newlines
+
+-> Core principle:
+Encoding must match rendering context.
+Generic “sanitize everything” is not enough.
+
+Q7. What is Content Security Policy (CSP) and how does it help against XSS?
+Ans:
+CSP is a browser security header that restricts what scripts can execute.
+Example:
+Content-Security-Policy: script-src 'self'
+This tells the browser:
+Only load scripts from this domain
+Block inline scripts
+
+-> Why CSP helps:
+Even if XSS exists:
+Inline <script> may not execute
+External malicious domains blocked
+But important
+CSP is:
+Defense in depth
+Not primary prevention
+Poorly configured CSP can be bypassed.
+
+Q8. How do HttpOnly and SameSite cookies mitigate XSS impact?
+HttpOnly Prevents JavaScript from reading cookies via: document.cookie
+This protects:
+Session tokens from direct theft
+But:
+Attacker can still perform actions using victim’s browser.
+SameSite : Controls cross-site cookie sending.
+Helps reduce:
+CSRF
+Some token exfiltration scenarios
+
+-> Important nuance:
+HttpOnly reduces token theft.
+It does NOT stop DOM manipulation or malicious API calls.
+
+Q9. What are dangerous DOM sinks in XSS?
+Ans:
+DOM sinks are browser APIs that interpret strings as HTML or script.
+Examples
+❌ Dangerous:
+innerHTML
+outerHTML
+document.write()
+eval()
+setTimeout(string)
+
+These interpret input as code or HTML.
+
+✅ Safer:
+textContent
+innerText
+createElement()
+setAttribute()
+
+These treat input as text.
+
+-> Core idea:
+XSS happens when untrusted input reaches dangerous sinks without encoding.
+
+Q10. How should modern frameworks prevent XSS by design?
+Ans:
+Frameworks should make unsafe behavior difficult by default.
+Examples
+React: Escapes content automatically
+Angular: Context-aware sanitization
+Strict template binding
+Django: Auto-escaping templates
+
+-> Dangerous patterns:
+Using raw HTML rendering APIs
+Bypassing sanitization utilities
+Mixing template contexts
+
+-> Secure architecture principle:
+Developers should:
+Use safe templating
+Avoid manual string concatenation
+Avoid raw HTML injection
+Security should be default, not optional.
+
+
+Summary:
+XSS = browser-side injection
+Context matters
+Encoding > filtering
+Script tags not required
+XSS = victim identity compromise
+Encoding must match context
+CSP reduces impact
+HttpOnly protects tokens, not actions
+Dangerous DOM sinks cause execution
+Secure frameworks auto-escape
