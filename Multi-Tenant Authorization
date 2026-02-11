@@ -1,0 +1,225 @@
+Q1. What is multi-tenant architecture and why does it complicate authorization?
+Ans:
+Multi-tenant means multiple customers (tenants) share the same application infrastructure.
+But they must never see each other’s data.
+
+-> What’s really happening:
+
+                ┌──────────────┐
+Tenant A  ────► │              │
+Tenant B  ────► │  Same App    │ ───► Shared Database
+Tenant C  ────► │              │
+                └──────────────┘
+
+Application layer is shared.
+Data must be logically isolated.
+
+-> Why authorization becomes harder:
+Now access control must validate:
+	• Who is the user?
+	• Which tenant do they belong to?
+	• Does this resource belong to that tenant?
+	• Does their role allow the action?
+This adds another dimension of trust validation.
+
+Q2. What are the common multi-tenant isolation models?
+Ans:
+Isolation can happen at different layers.
+The 3 common models
+1️⃣ Database per tenant
+	• Strong isolation
+	• Easier compliance
+	• Higher operational cost
+2️⃣ Schema per tenant
+	• Logical separation
+	• Medium complexity
+3️⃣ Shared database, tenant column
+	• Most common
+	• Cheapest
+	• Highest risk if authorization fails
+
+-> Security reality:
+The more shared the system, the more critical correct authorization becomes.
+
+Q3. What is the most common authorization mistake in multi-tenant systems?
+Ans: 
+Trusting tenant information from the client.
+
+-> What’s really happening:
+Request includes:
+GET /orders/123?tenantId=ABC
+Backend:
+	• trusts tenantId
+	• queries:
+SELECT * FROM orders WHERE id=123
+No verification that:
+	• order 123 belongs to tenant ABC
+	• user belongs to tenant ABC
+
+-> Correct pattern:
+Server must derive:
+	• user’s tenant from session/token
+	• verify resource’s tenant matches
+Never trust client-provided tenant identifiers.
+
+Q4. How should tenant context be derived securely?
+Ans:
+Tenant context must come from trusted identity claims, not request parameters.
+
+-> What’s really happening:
+After authentication:
+	• token/session contains:
+		○ user ID
+		○ tenant ID
+		○ roles
+Backend:
+	• extracts tenant from token
+	• ignores tenant in request
+
+Trust boundary:
+
+Client (untrusted)
+     │
+     ▼
+Backend (trusted)
+     │
+     ▼
+Database (sensitive data)
+
+Tenant enforcement must happen before DB query execution.
+
+Q5. How do horizontal and vertical access control apply in multi-tenant systems?
+Ans: 
+	• Horizontal → same role, different users
+	• Vertical → different privilege levels
+In multi-tenant systems:
+Horizontal risk:
+	• User A from Tenant 1 accessing User B from Tenant 1
+Cross-tenant risk:
+	• User A from Tenant 1 accessing data of Tenant 2
+Vertical risk:
+	• Regular user escalating to tenant admin
+All three must be enforced simultaneously.
+
+-> Correct enforcement logic:
+Access =
+(User belongs to tenant)
+AND (Resource belongs to tenant)
+AND (User role permits action)
+
+Q6. What is Row-Level Security (RLS) and how does it help multi-tenant isolation?
+Ans:
+Row-Level Security ensures users can only access specific rows in a table.
+
+-> What’s really happening:
+Instead of relying only on application logic:
+SELECT * FROM orders WHERE tenant_id = 'T1'
+The database itself enforces:
+User with tenant T1 can only see rows where tenant_id = T1
+
+-> Why this matters:
+	• Defense in depth
+	• Protects against developer mistakes
+	• Reduces risk of accidental data leakage
+
+But important:
+RLS is not a replacement for application-layer checks.
+It’s a safety net, not the only gate.
+
+Q7. RBAC vs ABAC in multi-tenant systems — which is better?
+Ans:
+RBAC = Role-Based Access Control
+ABAC = Attribute-Based Access Control
+RBAC
+	• Access based on roles (admin, user)
+	• Easy to understand
+	• Hard to scale for complex rules
+ABAC
+	• Access based on attributes:
+		○ user attributes
+		○ resource attributes
+		○ environment context
+	• More flexible
+	• More complex to implement
+
+In multi-tenant SaaS
+Often you need hybrid:
+	• Role + Tenant + Ownership + Resource state
+Example
+Access allowed if:
+	• user.role = "manager"
+	• user.tenant = resource.tenant
+	• resource.status != "archived"
+That’s ABAC-style logic.
+
+Q8. How does tenant context propagate in microservices architecture?
+Ans:
+In distributed systems, tenant context must travel securely between services.
+
+-> What’s really happening:
+Service A:
+	• authenticates user
+	• extracts tenant
+Then calls Service B.
+Question:
+How does Service B know the tenant?
+Correct approaches
+	• Signed JWT including tenant claim
+	• Service-to-service auth with propagated identity
+	• mTLS + token forwarding
+Dangerous pattern
+	• Passing tenantId as plain header
+	• Blindly trusting internal service calls
+Internal services are not automatically trusted.
+
+Q9. What are the risks of cross-tenant administrative features?
+Ans:
+Super-admin features can become cross-tenant breach vectors.
+
+-> What’s really happening:
+Example:
+	• Global support engineer
+	• Can impersonate users
+	• Can view tenant data
+If poorly designed:
+	• Privilege abuse
+	• Insider threat
+	• Audit gaps
+Secure design patterns
+	• Just-in-time elevation
+	• Explicit approval workflows
+	• Strong auditing
+	• Time-bound access
+
+Q10. How should logging and monitoring work in multi-tenant systems?
+Ans:
+You must detect cross-tenant anomalies.
+
+-> What’s really happening:
+Good logging includes:
+	• user ID
+	• tenant ID
+	• resource ID
+	• action
+	• timestamp
+You must detect:
+	• access to unexpected tenants
+	• high-volume enumeration
+	• privilege misuse
+
+-> Why this matters:
+Authorization bugs will happen.
+Detection limits damage.
+
+
+Summary:
+Tenant is a security boundary.
+Client tenant is untrusted.
+Isolation model defines risk.
+Access = identity + tenant + role
+App enforces.
+DB protects.
+Context must propagate.
+Admins are high risk.
+Logging limits blast radius.
+
