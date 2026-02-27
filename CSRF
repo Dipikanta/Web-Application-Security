@@ -551,6 +551,143 @@ API + Cookie session = CSRF risk.
 
 REST does not remove CSRF.
 
+Q and A :
+
+1️⃣ “If I use JWT in Authorization header instead of cookies, am I completely safe from CSRF?”
+CSRF requires: Automatic credential attachment by browser.
+Cookies are automatically attached.
+Authorization headers are NOT automatically attached.
+
+So if:
+• JWT is stored in memory or localStorage
+• JS manually attaches it in fetch header
+Then a malicious site cannot force the browser to attach that header.
+So yes — this design removes traditional CSRF.
+
+BUT.
+
+If the JWT is stored in a cookie (very common mistake), then:
+Set-Cookie: token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+Then the browser auto-attaches it again.
+CSRF is back.
+
+Even More Subtle
+If your API allows:
+Content-Type: application/x-www-form-urlencoded
+And uses cookie-based refresh tokens, then refresh endpoints may still be CSRFable.
+
+Sticky Mental Model
+CSRF cares about browser behavior.
+Not about token format.
+
+2️⃣ “Can CSRF happen in a REST API that only accepts JSON?”
+Browsers allow cross-site:
+• GET
+• POST (with form encoding)
+But they cannot send:
+Content-Type: application/json Without triggering a CORS preflight.
+Preflight requires server approval.
+
+So if:
+• Endpoint strictly enforces application/json
+• Rejects x-www-form-urlencoded
+• Rejects multipart/form-data
+Then classic form-based CSRF fails.
+
+However.
+
+If the server does:
+if request.body:
+    parse whatever comes
+Or auto-detects content type,
+Then attacker can still send valid state-changing data via form.
+
+Even More Advanced
+Some frameworks automatically parse JSON even when content-type is wrong. That reintroduces CSRF.
+
+Sticky Mental Model
+JSON-only APIs reduce CSRF risk because browsers cannot send JSON cross-site without preflight.
+But enforcement must be strict.
+If server accepts form-encoded data, CSRF remains possible.
+
+3️⃣ “Can CSRF exist in a purely mobile app?”
+Mobile apps don’t use browsers.
+CSRF depends on:
+• Automatic credential inclusion
+• Attacker-controlled request initiation
+
+In mobile apps:
+• Tokens are manually attached in headers
+• No third-party website can cause the app to send requests
+So classical CSRF does NOT apply.
+
+BUT.
+
+If the mobile app uses:
+• WebViews
+• Embedded browser components
+• Cookie-based authentication
+Then CSRF becomes possible again.
+
+Even worse:
+If deep links trigger authenticated actions:
+mybank://transfer?amount=5000
+An attacker app can launch that deep link.
+That’s CSRF-like behavior at OS level.
+
+Sticky Mental Model
+Native mobile apps are generally not vulnerable to classical CSRF because requests are programmatic and credentials are manually attached.
+However, WebViews, deep links, or cookie-based hybrid apps can reintroduce CSRF-like behavior.
+
+4️⃣ “Why does SameSite=None sometimes increase CSRF risk?”
+Modern browsers require:
+SameSite=None; Secure
+If you set:
+SameSite=None Without Secure, cookie may be rejected.
+
+Developers then:
+• Remove SameSite entirely
+• Or fallback to legacy behavior
+
+Result:
+Cookie becomes cross-site attachable.
+
+Also:
+If your system relies only on SameSite for CSRF protection and you explicitly set SameSite=None for third-party usage (e.g., embedded widgets), You re-enable CSRF risk.
+
+Sticky Mental Model
+SameSite is not a CSRF solution by itself.
+Setting SameSite=None allows cookies in cross-site contexts, which re-enables CSRF if no token validation exists.
+
+5️⃣ “Why does CSRF not work if the attacker uses fetch() from their own site?”
+“Attacker can just use fetch() to send request.”
+
+No.
+
+Browser security model prevents this.
+
+When attacker site runs:
+fetch("https://bank.com/transfer", {
+  method: "POST",
+  credentials: "include"
+})
+Browser sends preflight request. 
+Server must respond:
+Access-Control-Allow-Origin: attacker.com
+Access-Control-Allow-Credentials: true
+Otherwise, request is blocked.
+
+So:
+Simple HTML form → allowed
+Cross-origin JS fetch → blocked by CORS
+That’s why classic CSRF uses forms or image tags.
+Not fetch.
+
+Sticky Mental Model
+CSRF relies on browser-permitted cross-site form submissions. JavaScript-based cross-origin requests are restricted by CORS.
+That’s why attackers use forms, not fetch.
+
+
 
 
 
