@@ -198,6 +198,243 @@ Red flags
 	• “We’ll add it later”
 	• UI-based enforcement
 
+🔥11. “Can IDOR exist in POST or PATCH requests?”
+Example
+POST /update-email
+{
+   "userId": 123,
+   "email": "attacker@gmail.com"
+}
+
+Backend:
+UPDATE users SET email = ? WHERE id = ?
+
+If attacker changes:
+"userId": 456
+They update someone else’s email.
+That is IDOR.
+
+Why This Is Subtle
+Because developer thinks:
+“It’s not data retrieval, it’s update.”
+But authorization applies to:
+	• Read
+	• Write
+	• Delete
+	• Modify
+	• Upload
+	• Download
+Any operation on object must verify ownership.
+
+IDOR is not limited to read operations; any object-level action without contextual authorization is vulnerable.
+
+🔥12.  Multi-Tenant Saa→ Cross-Tenant Data Breachch
+🏗️ Whiteboard Architecture
+User → Web App → Shared Database
+Two tenants:
+	• Tenant A
+	• Tenant B
+Table:
+invoices
+----------------
+id
+tenant_id
+amount
+
+User from Tenant A logs in.
+🔎 Vulnerable Endpoint
+GET /api/invoices/9001
+Backend code:
+SELECT * FROM invoices WHERE id = 9001;
+
+Notice what is missing?
+No tenant check.
+
+🧨 Attack Chain
+Step 1 – Attacker logs in normally (Tenant A).
+Step 2 – They access:
+/api/invoices/9001
+Step 3 – That invoice belongs to Tenant B.
+Step 4 – Backend returns it because it only checks:
+	• Is user authenticated? ✅
+	• Does invoice exist? ✅
+It does NOT check:
+	• Does invoice belong to user’s tenant? ❌
+Data breach.
+
+💡 Why This Happens
+Developers think:
+“User is logged in → allowed.”
+They forget contextual authorization:
+“Allowed to access THIS object?”
+
+🛡️ Fix (Architecture Level)
+Query must always enforce tenant boundary:
+SELECT * FROM invoices 
+WHERE id = ? AND tenant_id = current_user.tenant_id;
+Better:
+	• Database row-level security.
+	• Central authorization middleware.
+
+🔥 13. Horizontal Privilege Escalatio→ Profile Modificationon
+🏗️ Architecture
+User → REST API → Users Table
+Endpoint:
+PUT /api/users/{userId}
+
+🔎 Vulnerable Code
+UPDATE users SET email = ? WHERE id = ?;
+
+🧨 Attack Chain
+Step 1 – Attacker logs in as user 101.
+Step 2 – They intercept request:
+PUT /api/users/101
+
+Step 3 – Change it to:
+PUT /api/users/102
+Step 4 – Backend updates user 102’s email.
+No ownership check.
+
+💡 Why This Happens
+Developers assume:
+“If you’re authenticated, you can update your profile.”
+But they trust the user-supplied userId.
+They should derive userId from session instead.
+
+🛡️ Fix
+Never trust client-supplied object ID for self operations.
+Instead of:
+PUT /api/users/{id}
+Use:
+PUT /api/me
+And derive ID from session.
+
+Or enforce:
+UPDATE users 
+SET email = ? 
+WHERE id = ? AND id = current_user.id;
+
+🔥 14 File Download System → Sensitive Document Leak
+🏗️ Architecture
+User → App → File Storage (S3 or local)
+Download endpoint:
+GET /download?fileId=48291
+Database:
+files
+----------------
+id
+owner_id
+path
+
+🔎 Vulnerable Code
+SELECT path FROM files WHERE id = ?;
+No ownership check.
+
+🧨 Attack Chain
+Step 1 – Attacker downloads their own file.
+Step 2 – They change:
+fileId=48291 → 48292
+Step 3 – That file belongs to another user.
+Step 4 – App fetches and streams file.
+Sensitive document leaked.
+
+💡 Why This Happens
+Object identity ≠ authorization.
+
+🛡️ Fix
+SELECT path FROM files 
+WHERE id = ? AND owner_id = current_user.id;
+Even better:
+	• Generate short-lived signed URLs only after authorization.
+
+🔥 15. Admin Role Upgrade → Vertical Privilege Escalationon
+Now we go deeper.
+🏗️ Architecture
+User → API → Role Table
+Endpoint:
+PATCH /api/users/{id}/role
+
+🔎 Vulnerable Code
+UPDATE users SET role = ? WHERE id = ?;
+Backend checks:
+	• User is authenticated
+	• User has “manager” role
+But does NOT check:
+	• Can manager modify THIS user?
+
+🧨 Attack Chain
+Step 1 – Attacker is “manager”.
+Step 2 – They modify:
+PATCH /api/users/attackerId
+{
+  "role": "admin"
+}
+Step 3 – Backend allows because:
+	• Manager role exists
+	• Update query succeeds
+Now attacker becomes admin.
+
+💡 Why This Happens
+Authorization is role-based only.
+Not object-sensitive.
+Vertical privilege escalation via IDOR.
+
+🛡️ Fix
+Authorization must enforce:
+	• Only admins can change roles
+	• Or cannot modify own role
+	• Or cannot assign higher privilege than self
+Access control must be contextual and hierarchical.
+
+🔥 16. GraphQL API → Hidden Object Exposure
+Modern systems use GraphQL.
+🏗️ Architecture
+User → GraphQL → Database
+Query:
+query {
+  order(id: "9001") {
+    id
+    amount
+    userId
+  }
+}
+
+🔎 Vulnerable Resolver
+Resolver only checks:
+	• User is authenticated
+Does NOT check:
+	• order.userId == current_user.id
+
+🧨 Attack Chain
+Step 1 – Attacker runs query for their own order.
+Step 2 – They modify:
+order(id: "9002")
+Step 3 – Backend returns someone else's order.
+
+GraphQL makes this worse because:
+	• Single endpoint
+	• Many object types
+	• Deep nested queries
+Developers often forget object-level checks inside resolvers.
+
+💡 Why This Happens
+GraphQL encourages field-level development.
+Authorization logic gets scattered or forgotten.
+
+🛡️ Fix
+Each resolver must enforce:
+if (order.userId != currentUser.id) deny();
+Or use centralized policy engine.
+
+🧠 The Pattern Behind All 5
+Every IDOR chain follows this structure:
+1. User controls object identifier
+2. Backend retrieves object by ID
+3. Backend fails to verify ownership or permission
+4. Sensitive data exposed or modified
+
+“What is IDOR at architecture level?”
+IDOR is an object-level authorization failure where the system enforces authentication but does not verify whether the authenticated user has access rights to the specific object referenced.
 
 Summary :
 Auth ≠ Access
