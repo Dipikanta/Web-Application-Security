@@ -1,0 +1,344 @@
+What Is Deserialization?
+Serialization = converting an in-memory object into a transferable format.
+Example:
+	• Java object → byte stream
+	• Python object → pickle file
+	• JSON object → string
+	• .NET object → binary
+Deserialization = reconstructing that object back into memory.
+
+The danger begins when:
+	The attacker controls the serialized data.
+Because deserialization is not just “data parsing”.
+It is:
+	Object reconstruction + code execution paths + class loading + method invocation.
+That’s why it becomes RCE.
+
+Question 1
+“Why is insecure deserialization more dangerous than SQL injection in some architectures?”
+SQL injection attacks data.
+Insecure deserialization attacks execution.
+
+When deserialization happens:
+	1. The runtime reads the stream.
+	2. It determines which class to instantiate.
+	3. It reconstructs object fields.
+	4. It may invoke:
+		○ Constructors
+		○ readObject()
+		○ readResolve()
+		○ finalize()
+		○ Magic methods (e.g., __wakeup, __destruct)
+
+If any of these methods contain logic that:
+	• Executes commands
+	• Loads files
+	• Makes network calls
+	• Writes files
+Then attacker-controlled input becomes executable behavior.
+
+This is why in Java, unsafe use of ObjectInputStream is catastrophic.
+The stream contains:
+	• Class metadata
+	• Field values
+	• Object graph
+So the attacker isn’t injecting text.
+They are injecting an entire object behavior graph.
+That is fundamentally more powerful than SQL injection.
+
+Question 2
+“What is a gadget chain, and why does deserialization RCE not require the vulnerable application to contain dangerous code?”
+A gadget = an existing class in the application’s classpath that performs some useful action when certain methods are invoked.
+Important insight:
+The attacker does not need to inject new code.
+They reuse existing code.
+Let’s say the application includes a library like:
+	• Apache Commons Collections
+	• Spring
+	• Logging frameworks
+Some classes in those libraries:
+	• Execute code during readObject()
+	• Or during hashCode()
+	• Or during toString()
+
+If the attacker can:
+	1. Construct an object graph
+	2. Chain objects together
+	3. Trigger method invocation during deserialization
+They create a gadget chain.
+
+The vulnerability exists not because:
+	• Developer wrote Runtime.exec().
+But because:
+	• The classpath includes reusable components that can be chained.
+
+This is why patching application code alone doesn’t fix deserialization RCE. You must control class loading or block unsafe deserialization entirely.
+
+Question 3
+“Why is JSON deserialization usually safer than Java binary deserialization — but still dangerous?”
+JSON itself is safe.
+But the framework mapping JSON to objects may not be.
+Example:
+If a framework allows:
+	a) Polymorphic deserialization : Polymorphism means a program can treat multiple child classes as a parent type.
+      Example:
+      You have a base class: 
+      Animal
+      And child classes:
+      Dog
+      Cat
+      Snake
+    If the API expects an Animal, polymorphic deserialization means:
+  	The deserializer decides at runtime which specific subclass to create.
+    So instead of always creating Animal, it might create Dog or Snake depending on input.
+
+    Why this matters:
+    If the attacker can control which subclass gets created, they can force the system to instantiate unexpected classes — possibly dangerous ones.
+
+	b) Type hints in JSON : A type hint is when JSON contains metadata telling the framework which class to instantiate.
+      Example JSON:
+      {
+        "@type": "com.example.AdminUser",
+        "username": "attacker"
+      }
+      Here, @type is a type hint.
+    Instead of the server deciding the class, the client is telling the server:
+  	“Instantiate this exact class.”
+    If the framework trusts that hint,it may load and create that class dynamically.
+
+	c) Automatic class instantiation : This means:
+      The framework automatically:
+      	1. Reads JSON fields
+      	2. Maps them to object fields
+      	3. Creates the object
+      	4. Populates it
+      	5. Possibly runs lifecycle methods
+      No manual validation.
+      If dangerous classes exist in the classpath, automatic instantiation can:
+    	• Trigger constructors
+    	• Trigger custom deserialization hooks
+      . Trigger validation logic with side effects
+
+Then attacker can supply:
+{
+  "@type": "com.example.DangerousClass",
+  ...
+}
+If the library supports auto type resolution (historically seen in some libraries), it will:
+	1. Look at the @type field
+	2. Instantiate that class
+	3. Populate fields
+	4. Trigger code
+
+So the danger depends on:
+	• Whether type information is accepted from user input.
+	• Whether arbitrary classes can be instantiated.
+
+In Java ecosystems, this issue has appeared in JSON libraries when “default typing” was enabled improperly.
+So JSON is safer because:
+	• It does not inherently carry object graphs.
+	• It does not encode bytecode.
+But unsafe polymorphic deserialization can make it equivalent to binary deserialization.
+The key lesson:
+	It’s not the format. It’s the object reconstruction behavior.
+
+Question 4
+“Why does signing or encrypting serialized data not automatically fix insecure deserialization?”
+That only works if:
+	• The attacker cannot generate valid signatures.
+	• The signing key is fully secure.
+	• The serialized object never leaks.
+
+But consider:
+If the system signs session cookies that contain serialized objects…
+If attacker can obtain a valid signed object (their own session),
+and modify internal object fields while keeping structure intact,
+and re-signing is possible through another API…
+Then signature doesn’t protect against logic abuse.
+
+Also:
+If deserialization logic itself is unsafe, even a trusted source may trigger a gadget chain.
+So signing protects integrity. It does not protect unsafe behavior.
+
+The real fix is:
+	• Avoid native object deserialization for untrusted input.
+	• Use safe, schema-bound formats.
+	• Disable polymorphic instantiation.
+	• Use allowlists of classes.
+
+Signing is a mitigation layer, not a root fix.
+
+Question 5
+“Where does insecure deserialization appear in real systems today?”
+Common locations:
+	1. Session storage (cookies containing serialized objects)
+	2. Caching layers
+	3. Message queues
+	4. RMI / RPC frameworks
+	5. Microservice communication
+	6. Distributed task systems
+	7. API request bodies mapped to objects
+	8. Mobile app backend request handling
+	9. AI pipeline model metadata loaders
+	10. Stateful web frameworks
+
+In modern cloud-native systems:
+	• Internal microservices often trust each other.
+	• Serialized objects pass through internal APIs.
+	• If one service is compromised, lateral movement via deserialization becomes possible.
+
+So the risk is not only internet-facing endpoints. It’s internal trust boundaries.
+
+Question 6
+How Deserialization Actually Becomes RCE (Internal Flow)
+Let’s visualize execution flow:
+	1. Application reads input stream.
+	2. ObjectInputStream begins reading object graph.
+	3. Class metadata loaded.
+	4. Object allocated without constructor.
+	5. Fields populated.
+	6. readObject() called automatically.
+	7. Method calls chain across objects.
+	8. Dangerous method executes.
+
+Key insight:
+Constructor may not even run. But readObject runs.
+This is why developers often don’t see the danger.
+
+Question 7
+“Why can deserialization bypass traditional input validation and WAF protections?”
+Most defenses inspect text input:
+	• SQL keywords
+	• <script>
+	• ../
+	• Suspicious patterns
+But serialized payloads are often:
+	• Binary blobs
+	• Base64 encoded
+	• Gzipped
+	• Nested object graphs
+
+A Web Application Firewall sees:
+rO0ABXNyABFqYXZhLnV0aWwu...
+That looks like harmless encoded data.
+
+But after decoding and deserialization:
+	1. The runtime reconstructs object graph.
+	2. Internal methods execute.
+	3. Gadget chain triggers.
+No suspicious string patterns exist.
+Why?
+Because deserialization attacks are structural, not textual.
+
+They exploit:
+	• Object lifecycle hooks
+	• Reflection
+	• Class loading
+Not string parsing.
+That’s why WAF is mostly ineffective against binary deserialization RCE.
+
+Memory anchor:
+	SQLi attacks strings.
+	Deserialization attacks object graphs.
+
+Question 8
+“Why does deserialization sometimes allow code execution even when constructors are never called?”
+During deserialization (in many runtimes):
+	• Objects are allocated in memory without calling the constructor.
+	• Then fields are populated directly.
+	• Then special lifecycle methods run.
+In Java, for example:
+	• readObject()
+	• readResolve()
+These are invoked automatically.
+So even if constructor is safe, dangerous logic inside readObject() will execute.
+This is why developers mistakenly believe:
+“My constructor is safe, so I’m protected.”
+But deserialization bypasses constructor logic entirely.
+
+Memory anchor:
+	Deserialization skips construction, but not execution.
+
+Question 9
+“Why is deserialization particularly dangerous in microservice architectures?”
+In monoliths, deserialization is usually exposed to external users.
+In microservices, it becomes worse because of implicit trust boundaries.
+
+Example scenario:
+Service A trusts Service B.
+Service B trusts Service C.
+If attacker compromises Service C:
+	1. They send malicious serialized object to B.
+	2. B trusts C and deserializes without strict validation.
+	3. Gadget chain executes in B.
+	4. Lateral movement begins.
+
+Internal APIs often:
+	• Skip validation
+	• Skip authentication checks
+	• Assume safe input
+So deserialization becomes a lateral movement primitive.
+This is especially dangerous when:
+	• Shared libraries exist
+	• Same classpath across services
+	• Shared object models
+
+Memory anchor:
+	In microservices, deserialization becomes an internal supply chain attack vector.
+
+Question 10
+“Why is insecure deserialization sometimes considered a supply chain vulnerability?”
+Because the exploit often depends on:
+	• Third-party libraries
+	• Framework internals
+	• Transitive dependencies
+The application itself may contain zero dangerous code.
+But the dependency tree includes a gadget class.
+
+If a library upgrade introduces a gadget chain, suddenly your system becomes exploitable.
+That means:
+Security posture depends on:
+	• Dependency management
+	• SBOM visibility
+	• Classpath awareness
+This is why deserialization security overlaps with supply chain security.
+
+Memory anchor:
+	You may not write the gadget, but you ship it.
+
+
+Mitigations:
+1️⃣ Best Fix: Avoid Native Deserialization
+Do not use:
+	• Java native serialization
+	• Python pickle for untrusted input
+	• PHP unserialize on user data
+These are inherently unsafe.
+
+2️⃣ Use Data-Only Formats
+Use:
+	• JSON with strict schema
+	• Protobuf with fixed schema
+	• Avro with schema enforcement
+Ensure:
+	• No runtime type resolution from input
+	• No arbitrary class instantiation
+
+3️⃣ Class Allowlisting
+If deserialization must occur:
+	• Restrict allowed classes
+	• Reject unknown types
+	• Use filtering APIs (modern runtimes support this)
+
+4️⃣ Disable Polymorphic Typing
+Never allow:
+	• Attacker-controlled type identifiers
+	• Reflection-based object construction
+
+5️⃣ Isolate Deserialization
+	• Sandbox process
+	• Run in restricted container
+	• No file or network access
+
+
+
