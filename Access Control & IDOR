@@ -1,1098 +1,663 @@
-Q1. What is access control and why is it central to application security?
-Ans:
-Access control decides who can do what on which resource.
-Authentication answers who you are.
-Access control enforces what you’re allowed to do.
+Access Control & IDOR
+Access control is one of the most critical security mechanisms in any application. It determines who is allowed to access which resources and perform which actions. When implemented incorrectly, it can lead to severe vulnerabilities that allow attackers to access or modify data belonging to other users.
+This document explains common access control failures including IDOR, horizontal privilege escalation, vertical privilege escalation, mass assignment, and missing function-level access control.
 
--> What’s really happening:
-For every request, the system must evaluate:
-	• identity (user / service)
-	• action (read, write, delete)
-	• resource (object, record, API)
-	• context (tenant, state, business rules)
-This decision must happen before the action executes.
 
--> Where systems fail:
-	• Access checks done only at:
-		○ UI
-		○ API gateway
-	• Backend trusts incoming identifiers blindly
+1. Access Control Fundamentals
+Access control ensures that authenticated users can only perform actions and access data they are permitted to.
+It works by validating three things:
 
-Q2. What is IDOR and why is it so common?
-Ans:
-IDOR happens when users can access other users’ data by changing an identifier.
+User Identity
+      |
+      v
+Authentication
+(Who are you?)
+      |
+      v
+Authorization
+(What are you allowed to do?)
+      |
+      v
+Resource Access
+Many applications stop at authentication, assuming that once a user is logged in, they can access certain resources. This assumption often leads to authorization failures.
 
--> What’s really happening:
-	• Client sends a resource ID (orderId, userId)
-	• Backend:
-		○ fetches the object
-		○ does not verify ownership
-	• Any authenticated user can enumerate data
 
--> Why it’s so common:
-	• Developers check authentication
-	• They forget object-level authorization
-	• IDs look random, so they “feel safe”
+Types of Access Control
+There are several models used in application security.
+Role-Based Access Control (RBAC)
+Permissions are assigned based on roles.
+Example:
 
--> Impact:
-	• Data leakage
-	• Account takeover paths
-	• Compliance violations
+User Role → Permissions
+-----------------------
+Admin → Manage users, modify system
+Manager → View reports
+Customer → View own data
 
-Q3. Why are role-based checks alone insufficient for access control?
-Ans:
-Having the right role doesn’t mean you own the data.
 
--> What’s really happening:
-	• Two users:
-		○ same role
-		○ different resources
-	• Role check passes
-	• Ownership check is missing
-Real-world example
-	• Both users are “customers”
-	• One accesses another customer’s order
+Attribute-Based Access Control (ABAC)
+Access is determined using attributes such as:
+	• user attributes
+	• resource attributes
+	• environmental conditions
+Example:
 
--> Correct approach:
-Access = role AND object relationship
+Allow access if:
+User.department = Finance
+AND
+Resource.type = FinancialReport
 
-Q4. Where should access control be enforced in a system?
-Ans:
-Access control must be enforced close to the data.
 
--> What’s really happening:
-	• Frontend:
-		○ improves UX
-		○ cannot be trusted
-	• API gateway:
-		○ enforces coarse rules
-		○ lacks business context
-	• Backend service:
-		○ knows:
-			- ownership
-			- tenant
-			- state
-			- business rules
+Object-Level Access Control
+Each resource belongs to a specific user.
+Example:
 
--> Correct design:
-	• Backend = final authority
-	• Gateway = defense in depth
+Order ID 1001 → belongs to User A
+Order ID 1002 → belongs to User B
+The application must verify ownership before returning the resource.
 
-Q5. How do you prevent IDOR in practice?
-Ans:
-Never trust client-supplied identifiers.
 
--> What’s really happening:
-For every request:
-	1. Identify the caller
-	2. Fetch the resource securely
-	3. Verify:
-		○ ownership or
-		○ explicit permission
-	4. Only then perform the action
+2. Access Control Failures
+Access control vulnerabilities occur when applications fail to enforce authorization checks properly.
+Common failures include:
 
--> Good patterns:
-	• Query by:
-		○ resource ID + user ID
-	• Centralized authorization logic
-	• Deny by default
+Access Control Failures
+|
+|-- IDOR (Broken Object Level Authorization)
+|-- Horizontal Privilege Escalation
+|-- Vertical Privilege Escalation
+|-- Mass Assignment
+|-- Missing Function-Level Access Control
+These vulnerabilities allow attackers to:
+	• access other users' data
+	• perform unauthorized actions
+	• escalate privileges
 
--> Bad patterns:
-	• “If ID exists, return it”
-	• Security through obscurity (UUIDs)
 
-Q6. How does IDOR appear in APIs even when IDs are not exposed directly?
-Ans:
-Hiding IDs does not prevent IDOR.
+3. IDOR (Insecure Direct Object Reference)
+Definition
+IDOR occurs when an application exposes a reference to an internal object (such as a database ID) and fails to verify whether the requesting user is authorized to access it.
+Attackers exploit this by modifying identifiers in requests.
 
--> What’s really happening:
-	• APIs often use:
-		○ indirect references
-		○ encoded IDs
-		○ UUIDs
-	• Backend still:
-		○ resolves the reference
-		○ fetches the object
-		○ skips ownership check
 
--> Why this fails:
-	• Attackers don’t need to guess IDs
-	• They reuse:
-		○ previously seen references
-		○ references from logs, emails, URLs
+How IDOR Happens
+Applications often use identifiers such as:
+	• user IDs
+	• order IDs
+	• invoice numbers
+	• file names
+Example request:
 
--> Correct mindset:
-Authorization, not obscurity, prevents IDOR.
+GET /api/orders/1001
+If the backend only retrieves the record but does not verify ownership, attackers can modify the identifier.
 
-Q7. How does IDOR manifest in multi-tenant systems?
-Ans:
-IDOR becomes cross-tenant data leakage.
+GET /api/orders/1002
+If order 1002 belongs to another user, the attacker gains unauthorized access.
 
--> What’s really happening:
-	• Requests include:
-		○ resource ID
-		○ sometimes tenant ID
-	• Backend:
-		○ trusts tenant ID from client
-		○ does not enforce tenant scoping
-Common failure
-	• Querying by:
-		○ resource ID only
-	• Not binding:
-		○ user → tenant → resource
 
--> Correct pattern:
-Every access check must enforce:
-	• tenant isolation
-	• object ownership
+IDOR Attack Flow
 
-Q8. What is indirect object reference and how is it different from IDOR?
-Ans: 
-Indirect references change how objects are referenced, not how access is controlled.
+Attacker logged in as User A
+        |
+        v
+Intercept request
+GET /api/orders/1001
+        |
+        v
+Modify object ID
+GET /api/orders/1002
+        |
+        v
+Server retrieves order 1002
+        |
+        X No ownership validation
+        |
+        v
+Attacker receives another user's data
 
--> What’s really happening
-	• Direct reference:
-		○ /orders/123
-	• Indirect reference:
-		○ /orders/abcxyz
-	• Backend maps:
-		○ abcxyz → 123
-Key mistake
-	• Developers assume indirection = security
-	• Authorization checks are still missing
-Important truth
-Indirect references do not replace access control.
 
-Q9. How should access control be tested effectively?
-Ans:
-You test access control by breaking assumptions, not following happy paths.
+Example Vulnerable Backend Code
+Example of a vulnerable implementation:
 
--> What’s really happening
-Effective testing includes:
-	• horizontal access attempts (peer data)
-	• vertical access attempts (privilege escalation)
-	• cross-tenant access
-What to look for
-	• Missing checks
-	• Inconsistent enforcement
-	• Partial protections
-Why automated tests miss this
-	• Tools don’t understand business context
-	• Human reasoning is required
+@app.route("/order/<order_id>")
+def get_order(order_id):
+    order = db.get_order(order_id)
+    return order
+The application retrieves the order directly using the ID without verifying ownership.
 
-Q10. How do you design access control so it scales and stays correct?
-Ans:
-Access control should be centralized, explicit, and default-deny.
 
--> What’s really happening:
-Good systems:
-	• define access rules clearly
-	• enforce them consistently
-	• avoid scattered logic
-Design principles
-	• One source of truth for authorization
-	• Explicit permission checks
-	• Fail closed, not open
-Red flags
-	• Copy-paste access checks
-	• “We’ll add it later”
-	• UI-based enforcement
+Secure Implementation
+The application must validate ownership before returning the object.
 
-🔥11. “Can IDOR exist in POST or PATCH requests?”
-Example
-POST /update-email
+@app.route("/order/<order_id>")
+def get_order(order_id):
+    order = db.get_order(order_id)
+
+    if order.user_id != current_user.id:
+        return "Unauthorized", 403
+
+    return order
+Now the request will only succeed if the order belongs to the authenticated user.
+
+
+Why Developers Accidentally Introduce IDOR
+IDOR usually appears because developers assume that:
+	• authentication automatically implies authorization
+	• IDs are unpredictable
+	• front-end controls are sufficient
+However, attackers can easily manipulate requests using tools such as proxies.
+
+
+Detection Techniques
+Security teams detect IDOR through:
+Manual Testing
+Modify identifiers in requests.
+Example:
+
+/api/account/4321
+/api/account/4322
+/api/account/4323
+If responses return different users' data, the application is vulnerable.
+
+
+Automated Security Testing
+Security tools may detect patterns where object identifiers appear in requests without authorization checks.
+However, manual testing is usually more effective.
+
+
+Secure Architecture Principles
+To prevent IDOR vulnerabilities:
+Enforce authorization at the backend
+Never rely on client-side checks.
+
+
+Validate object ownership
+Every resource request must verify ownership.
+
+User → Request resource
+        |
+        v
+Backend retrieves object
+        |
+        v
+Validate ownership
+        |
+      Yes → return resource
+      No  → deny request
+
+
+Use indirect references
+Instead of exposing database IDs, applications can use random identifiers.
+Example:
+
+/orders/7f4a9e21-8bcd-43f7
+However, this should not replace authorization checks.
+
+
+Centralize authorization logic
+Authorization logic should be implemented in middleware or service layers, rather than repeated across controllers.
+
+Privilege Escalation:
+Privilege escalation vulnerabilities occur when a user gains permissions beyond what they were originally granted.
+These vulnerabilities are extremely dangerous because they allow attackers to move from normal user → privileged user.
+There are two primary types:
+
+Privilege Escalation
+│
+├── Horizontal Privilege Escalation
+│
+└── Vertical Privilege Escalation
+Understanding the difference between these two is critical for security engineers and threat modelers.
+
+4. Horizontal Privilege Escalation
+Definition
+Horizontal privilege escalation occurs when a user gains access to resources belonging to another user with the same privilege level.
+In simple terms:
+
+User A → Accesses data of → User B
+Both users have the same role, but the application fails to enforce resource ownership checks.
+
+Example Scenario
+Consider an application that allows users to view their profile information.
+
+GET /api/users/123/profile
+If the server only verifies that the user is authenticated, but does not verify that the user owns the profile, an attacker can change the identifier.
+
+GET /api/users/124/profile
+If profile 124 belongs to another user, the attacker can access that information.
+
+Attack Flow
+
+User A logs into application
+        │
+        ▼
+User requests profile
+GET /api/users/123/profile
+        │
+        ▼
+Attacker intercepts request
+        │
+        ▼
+Modify identifier
+GET /api/users/124/profile
+        │
+        ▼
+Server returns User B's data
+The server never validated ownership, which resulted in unauthorized access.
+
+Real World Impact
+Horizontal privilege escalation can expose sensitive user data such as:
+	• Personal information
+	• Financial records
+	• Order histories
+	• Private messages
+	• Medical records
+In large-scale systems, this can lead to mass data exposure.
+
+Vulnerable Implementation Example
+
+@app.route("/profile/<user_id>")
+def get_profile(user_id):
+    profile = database.get_user(user_id)
+    return profile
+The backend retrieves the requested profile directly.
+No check ensures that the logged-in user matches the requested profile.
+
+Secure Implementation
+
+@app.route("/profile/<user_id>")
+def get_profile(user_id):
+
+    if user_id != current_user.id:
+        return "Unauthorized", 403
+
+    profile = database.get_user(user_id)
+    return profile
+Now the application ensures that users can only access their own profile.
+
+Prevention Strategies
+Always Validate Resource Ownership
+Every request must confirm that the user owns the requested object.
+
+User → Request resource
+        │
+        ▼
+Retrieve resource
+        │
+        ▼
+Check ownership
+        │
+   ┌────┴────┐
+   │         │
+Allowed   Denied
+
+Avoid Direct Object References
+Instead of exposing sequential identifiers like:
+
+/api/orders/1001
+/api/orders/1002
+/api/orders/1003
+Use unpredictable identifiers:
+
+/api/orders/a82bd-83jd-39dj
+However, this does not replace authorization checks.
+
+5. Vertical Privilege Escalation
+Definition
+Vertical privilege escalation occurs when a user gains access to functionality reserved for higher privilege roles.
+Example:
+
+User → becomes → Admin
+Unlike horizontal escalation, this vulnerability allows attackers to perform administrative actions.
+
+Example Scenario
+Consider an admin panel endpoint:
+
+POST /admin/deleteUser
+If the application only checks whether the user is logged in, any authenticated user may be able to call this endpoint.
+
+Attack Flow
+
+Normal User Account
+        │
+        ▼
+Intercept request to admin API
+        │
+        ▼
+Call privileged endpoint
+
+POST /admin/deleteUser
+        │
+        ▼
+Server executes admin action
+Because role verification is missing, the action succeeds.
+
+Real World Consequences
+Vertical privilege escalation can allow attackers to:
+	• Delete users
+	• Modify permissions
+	• Access internal dashboards
+	• Extract sensitive system data
+	• Control the application
+In worst cases, attackers gain full administrative control.
+
+Vulnerable Backend Example
+
+@app.route("/admin/deleteUser", methods=["POST"])
+def delete_user():
+
+    user_id = request.json["user_id"]
+    database.delete_user(user_id)
+
+    return "User deleted"
+This endpoint performs a critical action but does not verify the caller's role.
+
+Secure Implementation
+
+@app.route("/admin/deleteUser", methods=["POST"])
+def delete_user():
+
+    if current_user.role != "admin":
+        return "Forbidden", 403
+
+    user_id = request.json["user_id"]
+    database.delete_user(user_id)
+
+    return "User deleted"
+The system now enforces role-based authorization.
+
+Secure Architecture Pattern
+Authorization should ideally be enforced before reaching business logic.
+
+Client Request
+      │
+      ▼
+Authentication Middleware
+      │
+      ▼
+Authorization Middleware
+      │
+      ▼
+Business Logic
+This approach ensures that unauthorized requests never reach sensitive operations.
+
+Key Difference Between Horizontal and Vertical Escalation
+
+Horizontal Escalation
+User A → accesses → User B data
+
+Vertical Escalation
+User → gains → higher privilege role
+Both vulnerabilities stem from improper authorization checks.
+
+Mass Assignment & Missing Function Level Access Control
+Access control vulnerabilities are not always about reading someone else's data.
+Sometimes the problem lies in how applications process user input and expose sensitive functionality.
+Two common examples are:
+
+Access Control Failures
+│
+├── Mass Assignment
+│
+└── Missing Function Level Access Control
+Both vulnerabilities occur when applications trust user input or API access too much.
+
+
+6. Mass Assignment
+Definition
+Mass Assignment occurs when an application automatically binds user input to internal object properties without proper filtering.
+In simple terms:
+
+User Input → Automatically mapped → Application Object
+If sensitive fields are not protected, attackers can modify properties they should never control.
+
+
+How Mass Assignment Happens
+Modern frameworks automatically convert request parameters into application objects.
+Example:
+
+POST /api/updateUser
+Request body:
+
 {
-   "userId": 123,
-   "email": "attacker@gmail.com"
+  "username": "alice",
+  "email": "alice@example.com"
 }
+The backend maps these fields directly into a user object.
 
-Backend:
-UPDATE users SET email = ? WHERE id = ?
+Request JSON → User Object
+But if the attacker sends additional hidden parameters:
 
-If attacker changes:
-"userId": 456
-They update someone else’s email.
-That is IDOR.
-
-Why This Is Subtle
-Because developer thinks:
-“It’s not data retrieval, it’s update.”
-But authorization applies to:
-	• Read
-	• Write
-	• Delete
-	• Modify
-	• Upload
-	• Download
-Any operation on object must verify ownership.
-
-IDOR is not limited to read operations; any object-level action without contextual authorization is vulnerable.
-
-🔥12.  Multi-Tenant Saa→ Cross-Tenant Data Breachch
-🏗️ Whiteboard Architecture
-User → Web App → Shared Database
-Two tenants:
-	• Tenant A
-	• Tenant B
-Table:
-invoices
-----------------
-id
-tenant_id
-amount
-
-User from Tenant A logs in.
-🔎 Vulnerable Endpoint
-GET /api/invoices/9001
-Backend code:
-SELECT * FROM invoices WHERE id = 9001;
-
-Notice what is missing?
-No tenant check.
-
-🧨 Attack Chain
-Step 1 – Attacker logs in normally (Tenant A).
-Step 2 – They access:
-/api/invoices/9001
-Step 3 – That invoice belongs to Tenant B.
-Step 4 – Backend returns it because it only checks:
-	• Is user authenticated? ✅
-	• Does invoice exist? ✅
-It does NOT check:
-	• Does invoice belong to user’s tenant? ❌
-Data breach.
-
-💡 Why This Happens
-Developers think:
-“User is logged in → allowed.”
-They forget contextual authorization:
-“Allowed to access THIS object?”
-
-🛡️ Fix (Architecture Level)
-Query must always enforce tenant boundary:
-SELECT * FROM invoices 
-WHERE id = ? AND tenant_id = current_user.tenant_id;
-Better:
-	• Database row-level security.
-	• Central authorization middleware.
-
-🔥 13. Horizontal Privilege Escalatio→ Profile Modificationon
-🏗️ Architecture
-User → REST API → Users Table
-Endpoint:
-PUT /api/users/{userId}
-
-🔎 Vulnerable Code
-UPDATE users SET email = ? WHERE id = ?;
-
-🧨 Attack Chain
-Step 1 – Attacker logs in as user 101.
-Step 2 – They intercept request:
-PUT /api/users/101
-
-Step 3 – Change it to:
-PUT /api/users/102
-Step 4 – Backend updates user 102’s email.
-No ownership check.
-
-💡 Why This Happens
-Developers assume:
-“If you’re authenticated, you can update your profile.”
-But they trust the user-supplied userId.
-They should derive userId from session instead.
-
-🛡️ Fix
-Never trust client-supplied object ID for self operations.
-Instead of:
-PUT /api/users/{id}
-Use:
-PUT /api/me
-And derive ID from session.
-
-Or enforce:
-UPDATE users 
-SET email = ? 
-WHERE id = ? AND id = current_user.id;
-
-🔥 14 File Download System → Sensitive Document Leak
-🏗️ Architecture
-User → App → File Storage (S3 or local)
-Download endpoint:
-GET /download?fileId=48291
-Database:
-files
-----------------
-id
-owner_id
-path
-
-🔎 Vulnerable Code
-SELECT path FROM files WHERE id = ?;
-No ownership check.
-
-🧨 Attack Chain
-Step 1 – Attacker downloads their own file.
-Step 2 – They change:
-fileId=48291 → 48292
-Step 3 – That file belongs to another user.
-Step 4 – App fetches and streams file.
-Sensitive document leaked.
-
-💡 Why This Happens
-Object identity ≠ authorization.
-
-🛡️ Fix
-SELECT path FROM files 
-WHERE id = ? AND owner_id = current_user.id;
-Even better:
-	• Generate short-lived signed URLs only after authorization.
-
-🔥 15. Admin Role Upgrade → Vertical Privilege Escalationon
-Now we go deeper.
-🏗️ Architecture
-User → API → Role Table
-Endpoint:
-PATCH /api/users/{id}/role
-
-🔎 Vulnerable Code
-UPDATE users SET role = ? WHERE id = ?;
-Backend checks:
-	• User is authenticated
-	• User has “manager” role
-But does NOT check:
-	• Can manager modify THIS user?
-
-🧨 Attack Chain
-Step 1 – Attacker is “manager”.
-Step 2 – They modify:
-PATCH /api/users/attackerId
 {
+  "username": "alice",
+  "email": "alice@example.com",
   "role": "admin"
 }
-Step 3 – Backend allows because:
-	• Manager role exists
-	• Update query succeeds
-Now attacker becomes admin.
+And the backend blindly binds the fields, the attacker can elevate their privileges.
 
-💡 Why This Happens
-Authorization is role-based only.
-Not object-sensitive.
-Vertical privilege escalation via IDOR.
 
-🛡️ Fix
-Authorization must enforce:
-	• Only admins can change roles
-	• Or cannot modify own role
-	• Or cannot assign higher privilege than self
-Access control must be contextual and hierarchical.
+Attack Flow
 
-🔥 16. GraphQL API → Hidden Object Exposure
-Modern systems use GraphQL.
-🏗️ Architecture
-User → GraphQL → Database
-Query:
-query {
-  order(id: "9001") {
-    id
-    amount
-    userId
-  }
-}
-
-🔎 Vulnerable Resolver
-Resolver only checks:
-	• User is authenticated
-Does NOT check:
-	• order.userId == current_user.id
-
-🧨 Attack Chain
-Step 1 – Attacker runs query for their own order.
-Step 2 – They modify:
-order(id: "9002")
-Step 3 – Backend returns someone else's order.
-
-GraphQL makes this worse because:
-	• Single endpoint
-	• Many object types
-	• Deep nested queries
-Developers often forget object-level checks inside resolvers.
-
-💡 Why This Happens
-GraphQL encourages field-level development.
-Authorization logic gets scattered or forgotten.
-
-🛡️ Fix
-Each resolver must enforce:
-if (order.userId != currentUser.id) deny();
-Or use centralized policy engine.
-
-🧠 The Pattern Behind All 5
-Every IDOR chain follows this structure:
-1. User controls object identifier
-2. Backend retrieves object by ID
-3. Backend fails to verify ownership or permission
-4. Sensitive data exposed or modified
-
-“What is IDOR at architecture level?”
-IDOR is an object-level authorization failure where the system enforces authentication but does not verify whether the authenticated user has access rights to the specific object referenced.
-
--> Authorization Use Cases:
-	• IDOR (Broken Object Level Authorization)
-	• Horizontal privilege escalation
-	• Vertical privilege escalation
-	• Mass assignment
-    . Missing function-level access control
-
-1. IDOR → Unauthorized Data Access → Data Breach
-Real-world scenario
-A document management SaaS platform where users upload and view documents.
-Architecture:
-                 Internet
-                    │
-                    ▼
-            ┌────────────────┐
-            │   Web Browser  │
-            │     (User)     │
-            └────────────────┘
-                    │
-                    │ HTTPS
-                    ▼
-          ┌────────────────────┐
-          │   Web Application  │
-          │  Document Service  │
-          └────────────────────┘
-                    │
-                    ▼
-              ┌────────────┐
-              │  Database  │
-              │ documents  │
-              └────────────┘
-
-Normal Flow:
-User requests a document.
-GET /api/documents/84521
-Cookie: session=abc123
-Server executes:
-SELECT * FROM documents
-WHERE id = 84521;
-Returns:
-Document owner = user123
-But no ownership verification happens.
-
-Attack Flow:
-Attacker changes ID.
-GET /api/documents/84522
-Server returns another user’s document.
-
-Internal Vulnerability:
-The authorization check is missing.
-Proper logic should be:
-SELECT * FROM documents
-WHERE id = 84521
-AND owner_id = current_user
-But the system only checks:
-id = 84521
-
-Why this happens in real systems?
-Developers assume:
-Authentication = Authorization
-But authentication only answers:
-Who are you?
-Authorization answers:
-What are you allowed to access?
-If object ownership validation is skipped → IDOR occurs.
-
-Real attack chain:
-Attacker account
-       │
-       ▼
-Enumerate object IDs
-       │
-       ▼
-Access sensitive objects
-       │
-       ▼
-Download documents
-       │
-       ▼
-Large-scale data breach
-
-Mitigation:
-Two key protections:
-Object ownership verification
-if document.owner_id != user.id
-    deny access
-
-Use indirect object references
-Instead of:
-/api/documents/84521
-Use:
-/api/documents/a7b92d3f
-Random IDs prevent enumeration.
-
-2. Horizontal Privilege Escalation → Account Manipulation
-Horizontal escalation means:
-User A accesses resources belonging to User B
-Same privilege level, different accounts.
-
-Real-world scenario:
-An e-commerce platform where users can update their shipping address.
-
-Architecture:
-        Browser
-           │
-           ▼
-     Web Application
-           │
-           ▼
-      User Service
-           │
-           ▼
-        Database
-
-Normal Update Flow:
-User sends request:
-PUT /api/users/128/address
-Body:
-{
- "address": "New Delhi"
-}
-Server updates:
-UPDATE users
-SET address = "New Delhi"
-WHERE id = 128
-
-Attack Flow:
-Attacker changes user ID.
-PUT /api/users/129/address
-Now attacker updates another user’s address.
-
-Why this works?
-The system trusts the user ID provided in request.
-But it should instead rely on the session identity.
-Correct logic:
-if request.user_id != session.user_id
-   deny
-
-Attack chain:
-Attacker account
-       │
-       ▼
-Modify user ID parameter
-       │
-       ▼
-Change victim profile
-       │
-       ▼
-Hijack shipments / personal data
-
-Real consequences:
-Attackers could:
-change email
-reset password
-redirect deliveries
-
-Mitigation:
-Never trust IDs from the client.
-Use: session.user_id
-instead of: request.user_id
-
-3. Vertical Privilege Escalation → Admin Access
-Vertical escalation means:
-Regular user → Admin privileges
-
-Real-world scenario:
-A project management SaaS tool.
-
-Architecture:
-             Browser
-                │
-                ▼
-        ┌─────────────────┐
-        │  Web Application │
-        └─────────────────┘
-                │
-        ┌───────┴────────┐
-        ▼                ▼
- User APIs           Admin APIs
-        │                │
-        ▼                ▼
-        Database
-
-Normal Admin Flow:
-Admin performs action:
-POST /admin/create-user
-Server checks:
-if user.role != admin
-    deny
-
-Vulnerable Implementation:
-Developers only check authentication.
-if user.logged_in == true
-   allow
-
-Attack Flow:
-Attacker sends:
-POST /admin/create-user
-Since authentication exists, the request succeeds.
-
-Result:
-Attacker creates an admin account.
-Attack chain:
-Normal user login
+Attacker registers normal account
         │
         ▼
-Discover hidden admin API
+Attacker inspects API request
         │
         ▼
-Direct API call
-        │
-        ▼
-Admin functionality executed
+Finds update endpoint
 
-Why this happens?
-Front-end hides admin buttons:
-if role == admin
-   show admin UI
-But the backend does not enforce authorization.
+POST /api/updateUser
+        │
+        ▼
+Attacker adds hidden parameter
+
+role=admin
+        │
+        ▼
+Server automatically binds fields
+        │
+        ▼
+User becomes admin
+The vulnerability occurs because the application trusts client-controlled input.
+
+
+Real World Impact
+Mass assignment vulnerabilities have historically led to:
+	• privilege escalation
+	• account takeover
+	• unauthorized feature access
+	• security control bypass
+Some real incidents occurred in frameworks like Ruby on Rails, where automatic object binding exposed sensitive properties.
+
+
+Vulnerable Backend Example
+
+def update_user(request):
+
+    user = User(**request.json)
+    database.save(user)
+
+    return "Profile updated"
+Here the backend blindly assigns all request parameters to the User object.
+If the attacker adds hidden fields like:
+
+isAdmin=true
+accountStatus=active
+role=superuser
+they may change internal application state.
+
+
+Secure Implementation
+Instead of accepting all fields, applications should explicitly define allowed parameters.
+
+def update_user(request):
+
+    allowed_fields = {
+        "username": request.json["username"],
+        "email": request.json["email"]
+    }
+
+    user.update(allowed_fields)
+    database.save(user)
+
+    return "Profile updated"
+Now only safe fields are processed.
+
+
+Secure Design Pattern
+The safest approach is to implement allow-list input mapping.
+
+Incoming Request
+      │
+      ▼
+Filter Allowed Fields
+      │
+      ▼
+Bind Safe Fields
+      │
+      ▼
+Update Object
+Anything not explicitly allowed is ignored.
+
+
+Additional Protection Strategies
+Use DTOs (Data Transfer Objects)
+Instead of binding request data directly to domain objects:
+
+Request → DTO → Validation → Domain Object
+This prevents accidental modification of internal properties.
+
+
+Protect Sensitive Fields
+Fields such as the following must never be client-controlled:
+
+role
+isAdmin
+accountStatus
+permissions
+accountBalance
+These fields should only be modified by trusted server-side logic.
+
+
+7. Missing Function-Level Access Control
+Definition
+Missing Function-Level Access Control occurs when an application fails to verify whether a user is authorized to execute a specific function.
+This usually affects administrative APIs or sensitive backend operations.
+
+
+Example Scenario
+Consider an administrative endpoint:
+
+GET /admin/exportUsers
+This endpoint exports the entire user database.
+If the server only checks authentication:
+
+if user.isAuthenticated():
+then any logged-in user may call this endpoint.
+
+
+Attack Flow
+
+Attacker logs into normal user account
+        │
+        ▼
+Attacker discovers admin API endpoint
+
+/admin/exportUsers
+        │
+        ▼
+Attacker directly calls endpoint
+        │
+        ▼
+Server executes request
+        │
+        ▼
+Sensitive data exposed
+The application assumed that the frontend would hide the endpoint, but attackers interact directly with APIs.
+
+
+Why This Happens
+Developers sometimes rely on UI restrictions instead of backend enforcement.
+Example:
+
+Admin button hidden in UI
+But the backend API still exists:
+
+POST /admin/deleteUser
+Attackers simply send the request manually.
+
+
+Vulnerable Backend Example
+
+@app.route("/admin/exportUsers")
+def export_users():
+
+    data = database.get_all_users()
+    return data
+The function performs an administrative action but does not verify user role.
+
+
+Secure Implementation
+Every sensitive function must verify user privileges.
+
+@app.route("/admin/exportUsers")
+def export_users():
+
+    if current_user.role != "admin":
+        return "Forbidden", 403
+
+    data = database.get_all_users()
+    return data
+This ensures that only authorized users can access the function.
+
+
+Secure Architecture Pattern
+Function-level authorization should be enforced using centralized middleware.
+
+Client Request
+      │
+      ▼
+Authentication Layer
+      │
+      ▼
+Authorization Layer
+      │
+      ▼
+Role / Permission Check
+      │
+      ▼
+Application Function
+Centralizing authorization prevents developers from accidentally skipping checks.
+
+
+Common Mistake Developers Make
+Many applications enforce authorization only at the UI level.
+
+UI → Hides admin features
+API → Still accessible
+Attackers bypass the UI completely.
+
+Attacker → Direct API Request → Sensitive Function
+
+
+Key Security Lessons
+
+Mass Assignment
+User modifies internal object properties
+
+Missing Function-Level Access Control
+User executes privileged backend functions
+Both vulnerabilities occur because applications trust the client too much.
 Security must always be enforced server-side.
 
-Mitigation:
-Implement server authorization checks.
-Example:
-if user.role != "admin":
-   return 403
-Every admin endpoint must enforce this.
 
-4. Mass Assignment → Privilege Escalation
-Mass assignment occurs when frameworks automatically bind request parameters to objects.
+End of Access Control & IDOR Section
+This page now covers:
 
-Real-world scenario:
-A user registration API.
-Architecture:
-Browser
-   │
-   ▼
-Registration API
-   │
-   ▼
-ORM (Object Mapper)
-   │
-   ▼
-Database
-
-Vulnerable Code Example:
-user = new User(request.body)
-database.save(user)
-If request body contains:
-{
- "username": "attacker",
- "password": "123",
- "role": "admin"
-}
-Framework automatically assigns:
-user.role = admin
-
-Attack Flow:
-Attacker submits:
-POST /api/register
-Body:
-{
- "username":"attacker",
- "password":"123",
- "role":"admin"
-}
-
-Database result:
-user:
- username = attacker
- role = admin
-Attacker now has admin privileges.
-
-Why this happens?
-Many frameworks support automatic field mapping.
-Examples include:
-Spring Boot
-Rails
-Laravel
-Django serializers
-Developers forget to restrict sensitive fields.
-
-Mitigation:
-Use explicit field allowlists.
-Example:
-User.create({
- username: request.username,
- password: request.password
-})
-Never bind entire request bodies automatically.
-
-5. Missing Function-Level Access Control → Hidden Admin API Abuse
-This vulnerability occurs when endpoints exist but are not protected.
-
-Real-world architecture:
-         Browser
-            │
-            ▼
-       API Gateway
-            │
-            ▼
-        Backend APIs
-     ┌─────────┬─────────┐
-     ▼         ▼         ▼
-User APIs   Admin APIs   Metrics APIs
-
-Normal expectation:
-Only admins should access:
-GET /api/admin/reports
-
-Vulnerable system:
-Endpoint exists but no authorization check.
-Attacker simply calls:
-GET /api/admin/reports
-Server responds.
-
-Attack chain:
-Attacker scans API
-       │
-       ▼
-Find hidden endpoint
-       │
-       ▼
-Call endpoint directly
-       │
-       ▼
-Sensitive data exposed
-
-Why this occurs?
-Developers rely on:
-Frontend restrictions, Instead of backend enforcement.
-But attackers can bypass the frontend entirely.
-
-Mitigation:
-Enforce role-based access control.
-Example middleware:
-requireRole("admin")
-Every admin endpoint must use it.
-
-Mental Model That Helps You Remember
-All these vulnerabilities are authorization failures.
-Authorization must happen at three layers.
-
-User Authentication
-        │
-        ▼
-Endpoint Authorization
-        │
-        ▼
-Object-Level Authorization
-
-6. IDOR → Cloud Storage Exposure → Data Exfiltration
-This scenario is common in file-sharing SaaS platforms.
-Architecture:
-                Internet
-                    │
-                    ▼
-              Web Browser
-                    │
-                    ▼
-            Web Application
-          (File Management API)
-                    │
-         ┌──────────┴──────────┐
-         ▼                     ▼
-     Metadata DB           Object Storage
-                          (files, images)
-The database stores metadata:
-file_id
-owner_id
-storage_path
-
-Example:
-file_id: 84231
-owner_id: userA
-path: s3://bucket/file84231.pdf
-
-Normal Flow:
-User opens their file.
-GET /api/files/84231
-Server performs:
-SELECT * FROM files WHERE file_id = 84231
-Then generates a temporary download URL.
-https://storage.cloud/files/file84231.pdf
-
-Vulnerability:
-The backend does not check owner_id.
-It should verify:
-file.owner_id == session.user_id
-But instead it simply fetches by ID.
-
-Attack Flow:
-Attacker changes the file ID.
-GET /api/files/84232
-Now the API retrieves another user’s file metadata and returns a valid download URL.
-
-Attack Chain:
-Attacker account
-      │
-      ▼
-Enumerate file IDs
-      │
-      ▼
-Access metadata for other files
-      │
-      ▼
-Generate valid cloud download URLs
-      │
-      ▼
-Download sensitive documents
-
-Why this happens?
-Developers assume that:
-If user authenticated → file must belong to them
-But object ownership must always be verified.
-
-Mitigation:
-Object authorization enforcement:
-SELECT * FROM files
-WHERE file_id = ?
-AND owner_id = current_user
-Also generate short-lived storage URLs.
-
-7. Horizontal Privilege Escalation → Payment Fraud
-This scenario appears frequently in financial or subscription systems.
-Architecture:
- Browser
-    │
-    ▼
-Payment Service API
-    │
-    ▼
-Payment Processor
-    │
-    ▼
-Transaction Database
-
-Transactions are stored as:
-transaction_id
-user_id
-amount
-status
-
-Normal Flow:
-User requests refund.
-POST /api/refund
-{
-  "transaction_id": 90341
-}
-Server executes:
-UPDATE transactions
-SET status = refunded
-WHERE transaction_id = 90341
-
-Vulnerability:
-The system does not verify:
-transaction.user_id == session.user_id
-
-Attack Flow:
-Attacker uses someone else’s transaction ID.
-POST /api/refund
-{
-  "transaction_id": 90342
-}
-The system processes the refund.
-
-Attack Chain:
-Attacker logs in
-       │
-       ▼
-Observe transaction ID format
-       │
-       ▼
-Guess another ID
-       │
-       ▼
-Send refund request
-       │
-       ▼
-System refunds victim transaction
-
-Why this happens?
-Developers trust transaction ID supplied by client.
-But IDs should only be used as lookup keys after authorization checks.
-
-Mitigation:
-Authorization validation:
-if transaction.user_id != session.user_id
-    reject request
-
-8. Mass Assignment → Admin Role Injection
-Mass assignment vulnerabilities appear in frameworks with automatic object mapping.
-Architecture:
-Browser
-   │
-   ▼
-User Profile API
-   │
-   ▼
-ORM Mapper
-   │
-   ▼
-Database
-
-User object fields:
-id
-username
-email
-role
-account_status
-
-Vulnerable Code:
-user.update(request.body)
-The framework maps every field automatically.
-
-Normal Update Request:
-PATCH /api/profile
-{
- "email": "user@mail.com"
-}
-
-Attack Request:
-Attacker modifies body.
-PATCH /api/profile
-
-{
- "email": "attacker@mail.com",
- "role": "admin"
-}
-
-What happens internally?
-The ORM performs:
-user.role = "admin"
-Database update:
-UPDATE users
-SET email='attacker@mail.com',
-role='admin'
-
-Attack Chain:
-Attacker account
-      │
-      ▼
-Modify request body
-      │
-      ▼
-Inject admin role field
-      │
-      ▼
-ORM automatically updates role
-      │
-      ▼
-Attacker becomes admin
-
-Why this happens?
-Frameworks assume all input fields are safe.
-But sensitive fields like:
-role
-permissions
-account_status
-should never be client-controlled.
-
-Mitigation:
-Use explicit field allowlists.
-allowed_fields = ["email", "phone"]
-Reject all other fields.
-
-9. Missing Function-Level Access Control → Infrastructure Control
-This scenario occurs in DevOps dashboards.
-Architecture:
- Browser
-    │
-    ▼
- DevOps Management Portal
-    │
-    ▼
- Infrastructure APIs
-    │
-    ▼
- Cloud Environment
-
-The portal exposes APIs like:
-/api/deploy
-/api/restart-service
-/api/delete-instance
-
-Normal Flow:
-Only DevOps engineers should trigger deployments.
-POST /api/deploy
-
-Vulnerability:
-Backend does not verify roles.
-Frontend hides deployment buttons from normal users.
-But API remains accessible.
-
-Attack Flow:
-Attacker inspects network calls and discovers:
-POST /api/deploy
-They manually send request.
-POST /api/deploy
-{
-  "service": "payment-api"
-}
-
-Attack Chain:
-Normal user login
-       │
-       ▼
-Inspect frontend API calls
-       │
-       ▼
-Discover hidden endpoint
-       │
-       ▼
-Call deployment API directly
-       │
-       ▼
-Trigger unauthorized infrastructure changes
-
-Potential impact:
-Attacker may:
-deploy malicious code
-restart services
-delete production instances
-
-Why this happens?
-Developers assume:
-Frontend UI restrictions = security
-But attackers can directly call backend APIs.
-
-Mitigation:
-Server-side authorization middleware.
-Example:
-if user.role != "devops"
-    return 403
-
-
-
-
-Memory Model:
-Authorization must be enforced at three critical levels:
-1. Endpoint Level
-   Who can call this API?
-2. Object Level
-   Which resource can they access?
-3. Data Binding Level
-   What fields can they modify?
-
-Failures create:
-IDOR → object access bypass
-Horizontal escalation → access another user's data
-Vertical escalation → access higher privilege actions
-Mass assignment → privilege injection
-Missing function control → hidden admin functionality exposed
-Missing endpoint checks → vertical escalation
-Object ownership failure → IDOR
-User identity mismatch → horizontal escalation
-Automatic field binding → mass assignment
-
-
+Access Control Basics
+IDOR
+Horizontal Privilege Escalation
+Vertical Privilege Escalation
+Mass Assignment
+Missing Function-Level Access Control
 
