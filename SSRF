@@ -1,551 +1,484 @@
-🔥 Question 1
-“If I block 127.0.0.1 and localhost, have I fixed SSRF?”
-No. Because SSRF is not about localhost specifically. It is about server-controlled outbound requests.
-If I block:
-	• 127.0.0.1
-	• localhost
-I have only blocked the obvious loopback representation.
-But attackers can bypass this using:
-1️⃣ Alternative IP formats
-The same IP can be written as:
-	• Decimal: 2130706433
-	• Octal: 017700000001
-	• Hex: 0x7f000001
-	• Mixed: 127.1
-All resolve to 127.0.0.1.
-If your filter checks string patterns instead of resolving the IP properly → bypass.
+Server Side Request Forgery (SSRF)
+1. What is SSRF
+Server-Side Request Forgery occurs when a web application fetches a URL supplied by the user without validating where that request goes. The attacker tricks the server into sending requests to unintended destinations. 
+Because the request originates from the server itself, the attacker can access resources that are normally inaccessible from the internet.
+Typical SSRF targets include:
+	• internal admin panels
+	• internal APIs
+	• databases exposed over HTTP
+	• cloud metadata endpoints
+	• localhost services
+Example vulnerable feature:
 
-2️⃣ DNS Rebinding
-Attacker supplies:
-http://evil.com
-Initially:
-evil.com → public IP
-Your server validates it.
-But after validation, attacker changes DNS record:
-evil.com → 127.0.0.1
-Now your server makes request to localhost.
-If validation and connection are separate steps → race condition.
-
-3️⃣ Internal network ranges
-Even if localhost is blocked, attacker can access:
-	• 10.0.0.0/8
-	• 172.16.0.0/12
-	• 192.168.0.0/16
-	• Cloud metadata IP: 169.254.169.254
-
-“So what is the correct mitigation?”
-	1. Resolve hostname server-side.
-	2. Perform IP canonicalization.
-	3. Re-resolve DNS at request time.
-	4. Block private ranges after resolution.
-	5. Enforce outbound network firewall rules.
-	6. Use allowlist, not blocklist.
-Architecture rule:
-	Never trust user-controlled URLs. Ever.
-
-🔥 Question 2
-“Why is SSRF especially dangerous in cloud environments?”
-Because cloud environments expose metadata services to internal network only.
-Example:
-http://169.254.169.254/latest/meta-data/
-In:
-	• Amazon Web Services
-	• Google Cloud Platform
-	• Microsoft Azure
-The metadata endpoint provides:
-	• IAM role credentials
-	• Access tokens
-	• Instance identity
-	• Temporary secrets
-If SSRF exists → attacker retrieves credentials → full cloud takeover.
-
-Why metadata is reachable?
-Because cloud assumes:
-	Only trusted internal services can access it.
-SSRF breaks that trust boundary.
-
-“Is blocking 169.254.169.254 enough?”
-No.
-Because:
-	• Some clouds support IPv6 metadata
-	• Some allow hostnames like metadata.google.internal
-	• Some apps proxy requests
-
-Proper mitigation:
-AWS : Use IMDSv2 (session token required)
-Network layer : Block instance from accessing metadata if not needed.
-App layer : Never allow arbitrary URLs.
-
-SSRF converts a web app into a cloud privilege escalation tool.
-
-🔥 Question 3
-“What is blind SSRF and how do attackers detect it?”
-Blind SSRF means:
-The server makes a request, but the attacker does not see the response.
-Example:
-POST /fetch
-{
-  "url": "http://internal-db"
-}
-Server fetches internally, but response isn’t returned.
-
-So how does attacker detect it?
-They use:
-1️⃣ Out-of-band interaction servers
-Example:
-http://attacker-controlled.com
-If target server makes request, attacker logs it.
-They use:
-	• DNS logs
-	• HTTP logs
-Tools:
-Burp Collaborator style detection.
-
-2️⃣ Timing differences
-If internal host exists → response fast.
-If not → timeout.
-This reveals network structure.
-
-3️⃣ Side-channel behavior
-If internal request triggers:
-	• Error message
-	• Email
-	• Webhook
-	• Log entry
-Attacker observes secondary effect.
-
-Blind SSRF is often MORE dangerous because:
-	• You may not detect exploitation.
-	• It’s used for lateral movement.
-	• It’s used for port scanning internal network.
-
-Blind SSRF converts your application into an internal reconnaissance scanner.
-
-🔥 Question 4
-“Explain SSRF in microservices architecture.”
-In microservices:
-	• Services talk internally over HTTP.
-	• Often no authentication inside cluster.
-	• Trust is network-based.
-Example:
-Service A → Service B
-If Service A has SSRF, attacker can:
-	• Call internal admin APIs
-	• Access Kubernetes API
-	• Trigger background jobs
-	• Access Redis without auth
-
-In containerized environments:
-If SSRF reaches:
-	• http://kubernetes.default.svc
-	• Docker daemon
-	• Internal config services
-Attacker can:
-	• Create pods
-	• Read secrets
-	• Escalate privileges
-
-“How to defend?”
-	1. mTLS between services.
-	2. Internal auth tokens.
-	3. Zero trust architecture.
-	4. Egress firewall rules per service.
-	5. Sidecar proxy validation (Envoy-style).
-Architecture principle:
-	Internal network is not trusted. Identity > network location.
-
-🔥 Question 5
-“How does SSRF happen in real products? Give practical examples.”
-
-Common Real Entry Points
-1️⃣ Image fetchers
-User provides image URL → server downloads it.
-2️⃣ PDF generators
-User gives URL → server renders page.
-3️⃣ Webhook testers
-User provides callback URL.
-4️⃣ Open Graph preview generators
-Like link preview systems.
-5️⃣ AI/LLM URL fetch tools (modern risk)
-LLM agent can be instructed:
-“Fetch this URL.”
-If not sandboxed → SSRF through AI system.
-
-Why these features are vulnerable?
-Because developers think:
-“It’s just fetching a URL.”
-But they forget:
-That URL is attacker-controlled.
-
-Proper Secure Architecture Pattern
-Instead of direct fetch:
-	1. Use allowlist domains.
-	2. Use URL parser (not regex).
-	3. Resolve DNS → verify IP not private.
-	4. Force outbound proxy.
-	5. Drop redirect chains.
-	6. Block non-HTTP schemes (file://, gopher://, ftp://).
-	7. Disable automatic redirects.
-
-
-🔥6. “If I only allow HTTP and HTTPS schemes, am I safe from SSRF?”
-Even if only HTTP/HTTPS is allowed, the attacker can still:
--> Access Internal Admin Panels
--> http://10.0.0.5/admin
--> Access Redis (via HTTP proxy wrappers)
--> If some internal service exposes Redis through HTTP.
--> Access Kubernetes API
--> https://kubernetes.default.svc
--> Exploit Internal HTTP APIs
-
-Most internal services speak HTTP.
-SSRF does not require special protocol.
-It requires:
-	Any protocol your internal systems trust.
-
-The Real Insight
-Restricting protocol ≠ restricting destination.
-SSRF is about who controls the destination.
-
-“What if I block internal IP ranges but still allow HTTP/HTTPS?”
-Still not fully safe.
-Because attacker may:
-	• Use DNS rebinding
-	• Abuse open redirect
-	• Target IPv6 loopback (::1)
-	• Use URL parsing confusion (we’ll discuss that next)
-
-Scheme validation reduces attack surface but does not eliminate SSRF because HTTP alone is sufficient to reach privileged internal services.
-
-
-🔥7. “Explain URL parsing confusion attacks in SSRF.”
-Different components parse URLs differently:
-	• Your validation logic
-	• Your HTTP library
-	• Your reverse proxy
-	• Your load balancer
-If they interpret the URL differently → bypass.
-
-Example 1 – Username @ Trick
-Consider this URL:
-http://127.0.0.1@evil.com
-
-How is it parsed?
-Standard format:
-scheme://username:password@host
-So:
-	• username = 127.0.0.1
-	• host = evil.com
-But some naive filters see:
-“127.0.0.1 is in the string → block.”
-Or worse:
-They extract host incorrectly before @.
-
-Example 2 – Double Slash Confusion
-http://evil.com//127.0.0.1
-Some regex-based filters search for 127.0.0.1 in hostname part.
-But actual hostname is still evil.com.
-
-Example 3 – Encoded IP
-http://%31%32%37.0.0.1
-URL decoding may happen after validation.
-
-Example 4 – Mixed IPv6
-http://[::ffff:127.0.0.1]
-This is IPv4-mapped IPv6 loopback.
-If filter only checks IPv4 ranges → bypass.
-
-Core Problem
-Validation and usage must use the same canonical representation.
-If validation checks raw string, but connection uses normalized version, you lose.
-
-SSRF often succeeds due to inconsistent URL canonicalization across parsing layers.
-
-Correct Mitigation
-	1. Use standard URL parser (not regex).
-	2. Normalize URL completely.
-	3. Resolve to canonical IP.
-	4. Validate after normalization.
-	5. Validate actual connected socket IP.
-
-🔥 8.  “Can SSRF be used for internal port scanning? Explain technically.”
-The Core Idea
-If server can connect internally,
-attacker can probe:
-http://10.0.0.5:22
-http://10.0.0.5:3306
-http://10.0.0.5:8080
-Even if response body isn’t visible, timing reveals port state.
-
-How Port Scanning Works Through SSRF
-There are 3 observable states:
-	1. Port open → fast response
-	2. Port closed → immediate connection refused
-	3. Filtered → timeout
-By measuring response time differences,attacker maps internal network.
-
-Why This Is Powerful
-Internal services are often:
-	• Not authenticated
-	• Not exposed externally
-	• Running admin interfaces
-SSRF becomes:
-	An internal network reconnaissance tool.
-
-“What if response body isn’t returned?”
-Timing and error codes are enough.
-Even HTTP status difference:
-	• 502
-	• 504
-	• 500
-Can leak information.
-
-Real Architecture Insight
-In zero trust environments,internal services must still require authentication.
-Never rely on “internal network isolation”.
-
-🔥 9. “How can SSRF chain with open redirects?”
-Scenario
-You validate:
-	• evil.com → public IP
-	• IP safe → allowed
-But evil.com responds:
-HTTP 302 Location: http://10.0.0.5/admin
-If your HTTP client:
-	• Automatically follows redirects
-	• Does NOT revalidate destination
-You now connect internally.
-
-Why This Is Subtle
-Validation happened only on first request.
-Redirect chain bypasses validation.
-
-Redirects create a second implicit request that must undergo the same validation as the original.
-
-Proper Mitigation
-	1. Disable automatic redirects.
-	2. Or re-validate every redirect location.
-	3. Or use allowlist domains only.
-
-🔥 10. “Explain SSRF in modern AI/LLM agent systems.”
-How It Happens
-Many AI systems use:
-“Tools”
-
-Example:
-User says:
-“Summarize this URL: http://example.com”
-
-The LLM calls:
-fetch_url("http://example.com")
-
-If attacker supplies:
-http://169.254.169.254/latest/meta-data/
-LLM agent fetches internal metadata.
-This is SSRF through AI.
-
-Why This Is Worse
-Because:
-	• LLM can be prompt-injected.
-	• It can be tricked to fetch hidden endpoints.
-	• It may bypass normal UI validation.
-	• It may chain multiple internal calls.
-
-Real Risk
-Agent-based systems can:
-	• Access internal APIs
-	• Query databases
-	• Trigger webhooks
-	• Execute internal tools
-SSRF becomes autonomous.
-
-AI agents amplify SSRF risk because they combine untrusted input with autonomous outbound capability.
-
-Mitigation in AI Systems
-	1. Tool-level allowlists.
-	2. Strict domain restrictions.
-	3. Outbound proxy enforcement.
-	4. Metadata access disabled.
-	5. No raw URL fetching without validation.
-	6. Sandboxed execution environments.
-
-🔥 1️1. SSR→ Cloud Metadata → IAM Credentials → Full Cloud Takeoverer
-This is the classic chain, but at architecture level.
-
-🏗️ Architecture on Whiteboard
-User → Web App → EC2 Instance → Metadata Service
-Cloud IAM Role attached to instance
-Environment: Amazon Web Services
-Metadata endpoint:
-http://169.254.169.254/latest/meta-data/iam/security-credentials/
-
-🧠 Attack Chain
-Step 1 – SSRF exists in image fetcher:
 POST /fetch-image
 {
-  "url": "http://attacker-input"
+   "url": "https://example.com/image.jpg"
 }
-Step 2 – Attacker supplies:
-http://169.254.169.254/latest/meta-data/iam/security-credentials/
-Step 3 – App fetches IAM role name.
-Step 4 – Attacker fetches temporary credentials:
-AccessKeyId
-SecretAccessKey
-SessionToken
+If the application fetches the URL directly, the attacker can replace it with:
 
-Step 5 – Attacker now uses AWS CLI:
-aws s3 ls
-aws sts assume-role
-aws ec2 describe-instances
+http://localhost/admin
+Now the server makes the request internally.
 
-If role is overly permissive → full environment compromise.
 
-🔥 Why This Works
-Cloud metadata is trusted by default.
-SSRF breaks assumption:
-“Only local services can reach metadata.”
+2. Why SSRF is Dangerous
+SSRF turns the application server into a proxy controlled by the attacker.
 
-🛡️ Proper Architecture Defense
-	1. Use IMDSv2 (token required).
-	2. Block metadata at network layer if not needed.
-	3. Least-privilege IAM roles.
-	4. No arbitrary URL fetch features.
+Attacker
+   |
+   v
+Web Application  -----> Internal Service
+                     (not exposed to internet)
+Because the request originates from inside the network, internal security boundaries are bypassed.
+Attackers may be able to:
+• access internal admin panels
+• perform internal port scanning
+• retrieve sensitive configuration data
+• steal cloud credentials
+In cloud environments, SSRF is especially dangerous because metadata services expose instance credentials. 
+Example metadata endpoint:
 
-🔥 12. SSR→ Internal Service Discovery → Kubernetes API → Secret Extractionon
-Now we go modern cloud-native.
+http://169.254.169.254/latest/meta-data/
 
-🏗️ Architecture
-User → Frontend → API Service → Kubernetes Cluster
-Your app runs inside Kubernetes. Your app has SSRF.
-Inside cluster:
-	• Kubernetes API at:
-https://kubernetes.default.svc
-Environment: Kubernetes
 
-🧠 Attack Chain
-Step 1 – SSRF in webhook tester.
-Step 2 – Attacker targets:
-https://kubernetes.default.svc/api/v1/namespaces
-Step 3 – If service account token is auto-mounted (default behavior):Pod can authenticate to API. Kubernetes thinks:
-“This is a pod inside cluster. Trusted.” It returns secrets to attackers.
-Step 4 – Attacker extracts:
-/api/v1/secrets
-Step 5 – Retrieve database credentials.
-Step 6 – Connect to internal DB.
-Cluster compromised.
+3. How SSRF Works
+Typical vulnerable flow:
 
-🔥 Why This Works
-Kubernetes assumes:
-“Pods inside cluster are trusted.”
-SSRF turns web app into internal pod client.
-
-🛡️ Defense
-	1. Disable auto-mount of service account tokens.
-	2. RBAC least privilege.
-	3. NetworkPolicy restricting pod egress.
-	4. Outbound firewall rules.
-
-🔥 13. SSR→ Internal Admin Panel → Privilege Escalationon
-This is extremely common in enterprises.
-
-🏗️ Architecture
-Internet → Reverse Proxy → Web App
-Internal network:
-http://10.0.0.5/admin
-Admin panel accessible only internally.
-
-🧠 Attack Chain
-Step 1 – SSRF in PDF generator.
-Step 2 – Attacker sends:
-http://10.0.0.5/admin/create-user
-Step 3 – Internal admin API has no authentication because it assumes “internal network only”.
-Step 4 – Attacker creates admin account.
-Step 5 – Logs in externally using that account.
-Full privilege escalation.
-
-🔥 Why This Works
-Internal services often rely on network trust.This is legacy architecture thinking.
-Firewall protects internal service from internet. But SSRF bypassed firewall. Because request came from inside.
-
-🛡️ Defense
-	1. Internal services must authenticate.
-	2. mTLS between services.
-	3. Zero-trust networking.
-	4. Never expose privileged endpoints over plain HTTP internally.
-
-🔥 14. SSR→ Internal Redis → Remote Code Executionon
-This is more advanced and impressive.
-
-🏗️ Architecture
-Web App → Redis (internal)
-Redis running at:
-redis://10.0.0.8:6379
-No authentication (common misconfiguration).
-
-🧠 Attack Chain
-Step 1 – SSRF supports gopher protocol (or raw TCP via proxy).
-Step 2 – Attacker sends crafted Redis command:
-Redis protocol example:
-*3
-$3
-SET
-$4
-test
-$5
-value
-Step 3 – Attacker writes malicious cron job via Redis:Redis can write to file system if misconfigured.
-Attacker sends crafted data that Redis interprets as commands.
-Step 4 – Writes to:
-/var/spool/cron/root
-Redis executes commands.
-Step 5 – Gains remote shell.
-
-🔥 Why This Is Powerful
-Redis was never meant to be internet-exposed. SSRF tunnels into internal TCP services.
-Your server became a TCP tunnel to internal Redis. Attacker piggybacked on it.
-
-🛡️ Defense
-	1. Redis authentication enabled.
-	2. Bind Redis to localhost only.
-	3. No gopher/file schemes allowed.
-	4. Strict outbound firewall.
-
-🔥 15️. SSR→ Internal OAuth Service → Token Theftft
-Very senior-level chain.
-
-🏗️ Architecture
-User → App
-App talks to internal OAuth server:
+User Input → Application → Server fetches URL → Response returned
 Example:
-http://auth.internal.local/token
-Used for service-to-service authentication.
 
-🧠 Attack Chain
-Step 1 – Your app normally calls auth server using internal credentials. App has SSRF in URL preview feature.
-Step 2 – Attacker forces app to call:
-http://auth.internal.local/token?client_id=app&grant_type=client_credentials
-Step 3 – App automatically attaches its own internal credentials.
-Step 4 – OAuth server returns access token.
-Step 5 – Attacker extracts token from response.
-Step 6 – Use token to call internal APIs.
-Full lateral movement.
+GET /api/preview?url=http://example.com
+Backend code:
 
-🔥 Why This Is Dangerous
-Internal auth systems assume:
-“Caller is trusted service.”
-SSRF breaks identity boundary.
+response = requests.get(user_url)
+return response.text
+Attacker changes the URL:
 
-🛡️ Defense
-	1. Require mutual TLS.
-	2. Bind tokens to audience + IP.
-	3. Do not auto-attach credentials blindly.
-	4. Strict outbound restrictions.
+http://127.0.0.1/admin
+The server now accesses an internal resource.
 
-🧠 The Deep Pattern Across All 5
--> There exists something accessible only internally.
--> That thing trusts internal callers.
--> SSRF makes your app act as internal caller.
--> Attacker benefits from that trust.
 
-SSRF is a trust boundary violation where untrusted input controls server-side network identity, enabling lateral movement, credential extraction, or privilege escalation inside otherwise isolated systems.
+4. Basic SSRF Attack Example
+Vulnerable endpoint:
 
+GET /fetch?url=
+Attacker payload:
+
+/fetch?url=http://localhost:8080/admin
+Result:
+
+Server → localhost:8080/admin
+If the response is returned to the attacker, they can see internal data.
+
+
+5. Cloud SSRF (Most Important Modern Attack)
+Modern SSRF attacks usually target cloud metadata services.
+Example AWS metadata service:
+
+http://169.254.169.254/latest/meta-data/
+Attack payload:
+
+http://169.254.169.254/latest/meta-data/iam/security-credentials/
+If successful, attackers may obtain:
+	• IAM credentials
+	• instance tokens
+	• cloud configuration data
+These credentials can allow attackers to access cloud resources such as S3 or databases. 
+This exact technique contributed to the Capital One breach, where SSRF exposed AWS credentials. 
+
+
+6. SSRF Attack Types
+6.1 Basic SSRF
+Attacker directly accesses internal systems.
+Example:
+
+http://127.0.0.1:8080/admin
+
+
+6.2 Blind SSRF
+The attacker cannot see the response.
+Instead they detect impact via:
+	• DNS callbacks
+	• timing differences
+	• out-of-band channels
+Example payload:
+
+http://attacker.com/ssrf-test
+If the server makes the request, the attacker sees it in logs.
+
+
+6.3 File SSRF
+Some libraries allow other protocols.
+Example:
+
+file:///etc/passwd
+If allowed, the server may read local files.
+
+
+6.4 Internal Network Scanning
+Attackers use SSRF to scan internal networks.
+Example:
+
+http://10.0.0.5:8080
+http://10.0.0.6:8080
+http://10.0.0.7:8080
+This reveals internal services.
+
+
+7. Real World SSRF Entry Points
+Most SSRF vulnerabilities appear in features that fetch external resources.
+Common examples:
+Image import
+
+POST /upload
+{
+ "image_url":"http://example.com/image.png"
+}
+
+
+Webhook testing
+
+POST /webhook/test
+{
+ "url":"http://example.com"
+}
+
+
+URL preview services
+
+POST /preview
+{
+ "url":"http://example.com"
+}
+
+
+Document converters
+Example:
+
+PDF generator
+HTML → PDF
+The generator loads external resources.
+
+
+8. Secure Architecture Defense
+Strong defenses include:
+1. Outbound network restrictions
+The server should not be able to access internal addresses.
+Block:
+
+127.0.0.1
+169.254.169.254
+10.0.0.0/8
+192.168.0.0/16
+
+
+2. Allowlist URLs
+Only allow trusted domains.
+Example:
+
+allowed_domains = ["images.example.com"]
+
+
+3. Disable dangerous protocols
+Reject:
+
+file://
+gopher://
+ftp://
+
+
+4. Use cloud metadata protection
+AWS example:
+Enable IMDSv2.
+IMDSv2 requires a session token, making SSRF much harder. 
+
+
+9. Secure Coding Pattern
+Vulnerable Code
+
+url = request.GET["url"]
+response = requests.get(url)
+return response.text
+
+
+Secure Code
+
+from urllib.parse import urlparse
+
+url = request.GET["url"]
+parsed = urlparse(url)
+
+if parsed.hostname not in allowed_domains:
+    raise Exception("Invalid URL")
+
+response = requests.get(url)
+
+
+10. Production Security Checklist
+Before releasing features that fetch URLs:
+Check:
+
+□ URL allowlist enforced
+□ Private IPs blocked
+□ Metadata endpoint blocked
+□ Redirects validated
+□ Dangerous protocols disabled
+□ DNS rebinding protection
+□ Outbound firewall rules configured
+
+
+11. How to Answer SSRF in Interviews
+Best structure:
+1️⃣ Definition
+2️⃣ How SSRF works
+3️⃣ Internal network pivot
+4️⃣ Cloud metadata attack
+5️⃣ Real-world example
+6️⃣ Prevention techniques
+Example answer:
+	SSRF occurs when an application fetches user-controlled URLs without validation, allowing attackers to force the server to send requests to internal resources such as localhost services or cloud metadata endpoints.
+
+12. SSRF Bypass Techniques
+Even when developers attempt to block SSRF, attackers often bypass filters using creative techniques.
+Understanding these bypasses is extremely important in real-world security assessments and interviews.
+
+
+12.1 Localhost Bypass
+Applications often block:
+
+127.0.0.1
+localhost
+Attackers can use alternative representations.
+Alternative Loopback Formats
+
+127.1
+127.0.1
+0.0.0.0
+2130706433
+Example:
+
+http://2130706433/admin
+Because 2130706433 = 127.0.0.1 in decimal format.
+
+
+12.2 IPv6 Bypass
+Filters may only check IPv4 addresses.
+Example:
+
+http://[::1]/admin
+::1 is the IPv6 loopback address.
+
+
+12.3 DNS Rebinding
+In DNS rebinding, the attacker controls a domain that resolves to different IPs.
+Step 1
+
+evil.com → public IP
+Step 2
+
+evil.com → 127.0.0.1
+Flow:
+
+Attacker URL → Server resolves DNS → internal service
+ASCII Example
+
+Attacker
+   |
+   v
+Application
+   |
+   v
+evil.com
+   |
+   v
+127.0.0.1 (after DNS change)
+The application thinks it is accessing an external domain.
+
+
+12.4 Open Redirect Abuse
+If a domain is allowlisted but contains an open redirect, attackers can exploit it.
+Example:
+
+allowed-domain.com/redirect?url=http://127.0.0.1/admin
+Server flow:
+
+Application → allowed-domain.com → redirect → localhost
+Now the internal request succeeds.
+
+
+12.5 URL Encoding Tricks
+Attackers encode blocked characters.
+Example:
+
+http://127.0.0.1
+Encoded version:
+
+http://127%2e0%2e0%2e1
+Some filters fail to decode before validation.
+
+
+12.6 Mixed Encoding
+Example:
+
+http://%31%32%37.0.0.1
+This represents:
+
+127.0.0.1
+
+
+12.7 Protocol Bypass
+Applications may only check for http and https.
+But libraries may support other protocols.
+Examples:
+
+file://
+ftp://
+gopher://
+dict://
+Example payload:
+
+gopher://127.0.0.1:6379/_INFO
+This technique is used to exploit services like:
+	• Redis
+	• Memcached
+	• SMTP
+
+
+13. SSRF to Remote Code Execution
+In some architectures, SSRF can escalate to full server compromise.
+Example chain:
+
+SSRF → Redis → Write SSH key → RCE
+Attack flow:
+
+Attacker
+   |
+   v
+Web App
+   |
+   v
+SSRF → Redis
+   |
+   v
+Write malicious file
+   |
+   v
+Remote Code Execution
+Another example:
+
+SSRF → Kubernetes API → Pod creation → RCE
+
+
+14. Cloud-Specific SSRF Attacks
+Cloud environments expose metadata endpoints.
+Example AWS metadata request:
+
+GET http://169.254.169.254/latest/meta-data/
+Attackers may retrieve:
+
+IAM credentials
+Instance tokens
+Temporary keys
+Example credential path:
+
+http://169.254.169.254/latest/meta-data/iam/security-credentials/
+Once attackers obtain credentials they may access:
+
+S3 buckets
+DynamoDB
+EC2 APIs
+
+
+15. Defense Pitfalls
+Many SSRF protections fail due to incorrect assumptions.
+Common mistakes:
+Blocking only localhost
+Developers block:
+
+127.0.0.1
+But forget:
+
+10.0.0.0/8
+192.168.0.0/16
+169.254.0.0/16
+
+
+Checking URL before DNS resolution
+Example vulnerable flow:
+
+Validate URL → Resolve DNS → Send request
+Attackers exploit this using DNS rebinding.
+Correct flow:
+
+Resolve DNS → Validate IP → Send request
+
+
+Trusting redirects
+Example:
+
+allowed-domain.com → redirect → internal IP
+Applications must revalidate redirect targets.
+
+
+16. Production-Grade SSRF Defense Architecture
+Secure architecture pattern:
+
+User Input
+   |
+   v
+URL Validation Layer
+   |
+   v
+Domain Allowlist
+   |
+   v
+DNS Resolution
+   |
+   v
+IP Range Validation
+   |
+   v
+Outbound Firewall
+   |
+   v
+External Resource
+Critical protections:
+
+□ Strict domain allowlist
+□ DNS resolution before validation
+□ Private IP blocking
+□ Redirect validation
+□ Metadata endpoint protection
+□ Outbound firewall rules
+
+
+17. Interview Trick Question
+Question
+	Why is blocking 127.0.0.1 not sufficient to prevent SSRF?
+Answer
+Because attackers can bypass simple filters using alternative IP formats such as:
+
+2130706433
+127.1
+[::1]
+DNS rebinding
+open redirects
+URL encoding
+A secure defense must validate resolved IP addresses and enforce outbound network restrictions.
+
+
+18. Quick SSRF Payload Cheatsheet
+Common payloads used during testing:
+
+http://127.0.0.1
+http://localhost
+http://169.254.169.254
+http://[::1]
+http://2130706433
+http://0.0.0.0
+Cloud metadata:
+
+http://169.254.169.254/latest/meta-data/
+Protocol abuse:
+
+file:///etc/passwd
+gopher://127.0.0.1
