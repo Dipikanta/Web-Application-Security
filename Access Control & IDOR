@@ -436,15 +436,663 @@ Every IDOR chain follows this structure:
 “What is IDOR at architecture level?”
 IDOR is an object-level authorization failure where the system enforces authentication but does not verify whether the authenticated user has access rights to the specific object referenced.
 
-Summary :
-Auth ≠ Access
-Roles ≠ Ownership
-IDs ≠ Permission
-Backend ≠ Trustless
-Obscurity ≠ Security
-Tenant ≠ User
-Reference ≠ Permission
-Testing breaks assumptions
-Default deny wins
+-> Authorization Use Cases:
+	• IDOR (Broken Object Level Authorization)
+	• Horizontal privilege escalation
+	• Vertical privilege escalation
+	• Mass assignment
+    . Missing function-level access control
+
+1. IDOR → Unauthorized Data Access → Data Breach
+Real-world scenario
+A document management SaaS platform where users upload and view documents.
+Architecture:
+                 Internet
+                    │
+                    ▼
+            ┌────────────────┐
+            │   Web Browser  │
+            │     (User)     │
+            └────────────────┘
+                    │
+                    │ HTTPS
+                    ▼
+          ┌────────────────────┐
+          │   Web Application  │
+          │  Document Service  │
+          └────────────────────┘
+                    │
+                    ▼
+              ┌────────────┐
+              │  Database  │
+              │ documents  │
+              └────────────┘
+
+Normal Flow:
+User requests a document.
+GET /api/documents/84521
+Cookie: session=abc123
+Server executes:
+SELECT * FROM documents
+WHERE id = 84521;
+Returns:
+Document owner = user123
+But no ownership verification happens.
+
+Attack Flow:
+Attacker changes ID.
+GET /api/documents/84522
+Server returns another user’s document.
+
+Internal Vulnerability:
+The authorization check is missing.
+Proper logic should be:
+SELECT * FROM documents
+WHERE id = 84521
+AND owner_id = current_user
+But the system only checks:
+id = 84521
+
+Why this happens in real systems?
+Developers assume:
+Authentication = Authorization
+But authentication only answers:
+Who are you?
+Authorization answers:
+What are you allowed to access?
+If object ownership validation is skipped → IDOR occurs.
+
+Real attack chain:
+Attacker account
+       │
+       ▼
+Enumerate object IDs
+       │
+       ▼
+Access sensitive objects
+       │
+       ▼
+Download documents
+       │
+       ▼
+Large-scale data breach
+
+Mitigation:
+Two key protections:
+Object ownership verification
+if document.owner_id != user.id
+    deny access
+
+Use indirect object references
+Instead of:
+/api/documents/84521
+Use:
+/api/documents/a7b92d3f
+Random IDs prevent enumeration.
+
+2. Horizontal Privilege Escalation → Account Manipulation
+Horizontal escalation means:
+User A accesses resources belonging to User B
+Same privilege level, different accounts.
+
+Real-world scenario:
+An e-commerce platform where users can update their shipping address.
+
+Architecture:
+        Browser
+           │
+           ▼
+     Web Application
+           │
+           ▼
+      User Service
+           │
+           ▼
+        Database
+
+Normal Update Flow:
+User sends request:
+PUT /api/users/128/address
+Body:
+{
+ "address": "New Delhi"
+}
+Server updates:
+UPDATE users
+SET address = "New Delhi"
+WHERE id = 128
+
+Attack Flow:
+Attacker changes user ID.
+PUT /api/users/129/address
+Now attacker updates another user’s address.
+
+Why this works?
+The system trusts the user ID provided in request.
+But it should instead rely on the session identity.
+Correct logic:
+if request.user_id != session.user_id
+   deny
+
+Attack chain:
+Attacker account
+       │
+       ▼
+Modify user ID parameter
+       │
+       ▼
+Change victim profile
+       │
+       ▼
+Hijack shipments / personal data
+
+Real consequences:
+Attackers could:
+change email
+reset password
+redirect deliveries
+
+Mitigation:
+Never trust IDs from the client.
+Use: session.user_id
+instead of: request.user_id
+
+3. Vertical Privilege Escalation → Admin Access
+Vertical escalation means:
+Regular user → Admin privileges
+
+Real-world scenario:
+A project management SaaS tool.
+
+Architecture:
+             Browser
+                │
+                ▼
+        ┌─────────────────┐
+        │  Web Application │
+        └─────────────────┘
+                │
+        ┌───────┴────────┐
+        ▼                ▼
+ User APIs           Admin APIs
+        │                │
+        ▼                ▼
+        Database
+
+Normal Admin Flow:
+Admin performs action:
+POST /admin/create-user
+Server checks:
+if user.role != admin
+    deny
+
+Vulnerable Implementation:
+Developers only check authentication.
+if user.logged_in == true
+   allow
+
+Attack Flow:
+Attacker sends:
+POST /admin/create-user
+Since authentication exists, the request succeeds.
+
+Result:
+Attacker creates an admin account.
+Attack chain:
+Normal user login
+        │
+        ▼
+Discover hidden admin API
+        │
+        ▼
+Direct API call
+        │
+        ▼
+Admin functionality executed
+
+Why this happens?
+Front-end hides admin buttons:
+if role == admin
+   show admin UI
+But the backend does not enforce authorization.
+Security must always be enforced server-side.
+
+Mitigation:
+Implement server authorization checks.
+Example:
+if user.role != "admin":
+   return 403
+Every admin endpoint must enforce this.
+
+4. Mass Assignment → Privilege Escalation
+Mass assignment occurs when frameworks automatically bind request parameters to objects.
+
+Real-world scenario:
+A user registration API.
+Architecture:
+Browser
+   │
+   ▼
+Registration API
+   │
+   ▼
+ORM (Object Mapper)
+   │
+   ▼
+Database
+
+Vulnerable Code Example:
+user = new User(request.body)
+database.save(user)
+If request body contains:
+{
+ "username": "attacker",
+ "password": "123",
+ "role": "admin"
+}
+Framework automatically assigns:
+user.role = admin
+
+Attack Flow:
+Attacker submits:
+POST /api/register
+Body:
+{
+ "username":"attacker",
+ "password":"123",
+ "role":"admin"
+}
+
+Database result:
+user:
+ username = attacker
+ role = admin
+Attacker now has admin privileges.
+
+Why this happens?
+Many frameworks support automatic field mapping.
+Examples include:
+Spring Boot
+Rails
+Laravel
+Django serializers
+Developers forget to restrict sensitive fields.
+
+Mitigation:
+Use explicit field allowlists.
+Example:
+User.create({
+ username: request.username,
+ password: request.password
+})
+Never bind entire request bodies automatically.
+
+5. Missing Function-Level Access Control → Hidden Admin API Abuse
+This vulnerability occurs when endpoints exist but are not protected.
+
+Real-world architecture:
+         Browser
+            │
+            ▼
+       API Gateway
+            │
+            ▼
+        Backend APIs
+     ┌─────────┬─────────┐
+     ▼         ▼         ▼
+User APIs   Admin APIs   Metrics APIs
+
+Normal expectation:
+Only admins should access:
+GET /api/admin/reports
+
+Vulnerable system:
+Endpoint exists but no authorization check.
+Attacker simply calls:
+GET /api/admin/reports
+Server responds.
+
+Attack chain:
+Attacker scans API
+       │
+       ▼
+Find hidden endpoint
+       │
+       ▼
+Call endpoint directly
+       │
+       ▼
+Sensitive data exposed
+
+Why this occurs?
+Developers rely on:
+Frontend restrictions, Instead of backend enforcement.
+But attackers can bypass the frontend entirely.
+
+Mitigation:
+Enforce role-based access control.
+Example middleware:
+requireRole("admin")
+Every admin endpoint must use it.
+
+Mental Model That Helps You Remember
+All these vulnerabilities are authorization failures.
+Authorization must happen at three layers.
+
+User Authentication
+        │
+        ▼
+Endpoint Authorization
+        │
+        ▼
+Object-Level Authorization
+
+6. IDOR → Cloud Storage Exposure → Data Exfiltration
+This scenario is common in file-sharing SaaS platforms.
+Architecture:
+                Internet
+                    │
+                    ▼
+              Web Browser
+                    │
+                    ▼
+            Web Application
+          (File Management API)
+                    │
+         ┌──────────┴──────────┐
+         ▼                     ▼
+     Metadata DB           Object Storage
+                          (files, images)
+The database stores metadata:
+file_id
+owner_id
+storage_path
+
+Example:
+file_id: 84231
+owner_id: userA
+path: s3://bucket/file84231.pdf
+
+Normal Flow:
+User opens their file.
+GET /api/files/84231
+Server performs:
+SELECT * FROM files WHERE file_id = 84231
+Then generates a temporary download URL.
+https://storage.cloud/files/file84231.pdf
+
+Vulnerability:
+The backend does not check owner_id.
+It should verify:
+file.owner_id == session.user_id
+But instead it simply fetches by ID.
+
+Attack Flow:
+Attacker changes the file ID.
+GET /api/files/84232
+Now the API retrieves another user’s file metadata and returns a valid download URL.
+
+Attack Chain:
+Attacker account
+      │
+      ▼
+Enumerate file IDs
+      │
+      ▼
+Access metadata for other files
+      │
+      ▼
+Generate valid cloud download URLs
+      │
+      ▼
+Download sensitive documents
+
+Why this happens?
+Developers assume that:
+If user authenticated → file must belong to them
+But object ownership must always be verified.
+
+Mitigation:
+Object authorization enforcement:
+SELECT * FROM files
+WHERE file_id = ?
+AND owner_id = current_user
+Also generate short-lived storage URLs.
+
+7. Horizontal Privilege Escalation → Payment Fraud
+This scenario appears frequently in financial or subscription systems.
+Architecture:
+ Browser
+    │
+    ▼
+Payment Service API
+    │
+    ▼
+Payment Processor
+    │
+    ▼
+Transaction Database
+
+Transactions are stored as:
+transaction_id
+user_id
+amount
+status
+
+Normal Flow:
+User requests refund.
+POST /api/refund
+{
+  "transaction_id": 90341
+}
+Server executes:
+UPDATE transactions
+SET status = refunded
+WHERE transaction_id = 90341
+
+Vulnerability:
+The system does not verify:
+transaction.user_id == session.user_id
+
+Attack Flow:
+Attacker uses someone else’s transaction ID.
+POST /api/refund
+{
+  "transaction_id": 90342
+}
+The system processes the refund.
+
+Attack Chain:
+Attacker logs in
+       │
+       ▼
+Observe transaction ID format
+       │
+       ▼
+Guess another ID
+       │
+       ▼
+Send refund request
+       │
+       ▼
+System refunds victim transaction
+
+Why this happens?
+Developers trust transaction ID supplied by client.
+But IDs should only be used as lookup keys after authorization checks.
+
+Mitigation:
+Authorization validation:
+if transaction.user_id != session.user_id
+    reject request
+
+8. Mass Assignment → Admin Role Injection
+Mass assignment vulnerabilities appear in frameworks with automatic object mapping.
+Architecture:
+Browser
+   │
+   ▼
+User Profile API
+   │
+   ▼
+ORM Mapper
+   │
+   ▼
+Database
+
+User object fields:
+id
+username
+email
+role
+account_status
+
+Vulnerable Code:
+user.update(request.body)
+The framework maps every field automatically.
+
+Normal Update Request:
+PATCH /api/profile
+{
+ "email": "user@mail.com"
+}
+
+Attack Request:
+Attacker modifies body.
+PATCH /api/profile
+
+{
+ "email": "attacker@mail.com",
+ "role": "admin"
+}
+
+What happens internally?
+The ORM performs:
+user.role = "admin"
+Database update:
+UPDATE users
+SET email='attacker@mail.com',
+role='admin'
+
+Attack Chain:
+Attacker account
+      │
+      ▼
+Modify request body
+      │
+      ▼
+Inject admin role field
+      │
+      ▼
+ORM automatically updates role
+      │
+      ▼
+Attacker becomes admin
+
+Why this happens?
+Frameworks assume all input fields are safe.
+But sensitive fields like:
+role
+permissions
+account_status
+should never be client-controlled.
+
+Mitigation:
+Use explicit field allowlists.
+allowed_fields = ["email", "phone"]
+Reject all other fields.
+
+9. Missing Function-Level Access Control → Infrastructure Control
+This scenario occurs in DevOps dashboards.
+Architecture:
+ Browser
+    │
+    ▼
+ DevOps Management Portal
+    │
+    ▼
+ Infrastructure APIs
+    │
+    ▼
+ Cloud Environment
+
+The portal exposes APIs like:
+/api/deploy
+/api/restart-service
+/api/delete-instance
+
+Normal Flow:
+Only DevOps engineers should trigger deployments.
+POST /api/deploy
+
+Vulnerability:
+Backend does not verify roles.
+Frontend hides deployment buttons from normal users.
+But API remains accessible.
+
+Attack Flow:
+Attacker inspects network calls and discovers:
+POST /api/deploy
+They manually send request.
+POST /api/deploy
+{
+  "service": "payment-api"
+}
+
+Attack Chain:
+Normal user login
+       │
+       ▼
+Inspect frontend API calls
+       │
+       ▼
+Discover hidden endpoint
+       │
+       ▼
+Call deployment API directly
+       │
+       ▼
+Trigger unauthorized infrastructure changes
+
+Potential impact:
+Attacker may:
+deploy malicious code
+restart services
+delete production instances
+
+Why this happens?
+Developers assume:
+Frontend UI restrictions = security
+But attackers can directly call backend APIs.
+
+Mitigation:
+Server-side authorization middleware.
+Example:
+if user.role != "devops"
+    return 403
+
+
+
+
+Memory Model:
+Authorization must be enforced at three critical levels:
+1. Endpoint Level
+   Who can call this API?
+2. Object Level
+   Which resource can they access?
+3. Data Binding Level
+   What fields can they modify?
+
+Failures create:
+IDOR → object access bypass
+Horizontal escalation → access another user's data
+Vertical escalation → access higher privilege actions
+Mass assignment → privilege injection
+Missing function control → hidden admin functionality exposed
+Missing endpoint checks → vertical escalation
+Object ownership failure → IDOR
+User identity mismatch → horizontal escalation
+Automatic field binding → mass assignment
+
 
 
