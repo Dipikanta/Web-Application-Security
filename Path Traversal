@@ -1,0 +1,729 @@
+Question 1
+Why does path traversal occur even when developers try to block ../ in user input?
+Most beginners think path traversal happens because the developer forgot to filter ../.
+But the real reason it happens is deeper:
+the filesystem normalizes paths before accessing files.
+Let’s understand the internal mechanics.
+
+Assume a web application serves user profile pictures:
+GET /profile?image=123.png
+Backend code:
+file_path = "/var/www/images/" + user_input
+open(file_path)
+
+If the attacker supplies:
+../../etc/passwd
+The constructed path becomes:
+/var/www/images/../../etc/passwd
+
+But the operating system does path normalization before opening the file.
+The OS resolves the path step-by-step:
+/var/www/images/../../etc/passwd
+        ↑
+images/.. → /var/www
+        ↑
+www/.. → /
+
+Final resolved path:
+/etc/passwd
+
+So even though the application intended to stay inside /var/www/images, the filesystem interpreter collapses the traversal segments.
+
+Why naive filtering fails?
+Many developers try:
+if "../" in input:
+    reject
+Attackers bypass this easily:
+..%2f
+..%252f
+..%c0%af
+....//
+Because URL decoding and normalization happen in multiple layers:
+Browser
+↓
+Reverse proxy
+↓
+Web framework
+↓
+Application
+↓
+Filesystem
+
+If the validation occurs before decoding, but the OS resolves after decoding, traversal succeeds.
+
+Correct mitigation:
+The secure design principle is never concatenate user input into file paths.
+Instead:
+Use indirect object references.
+Example:
+GET /profile?image_id=123
+Server mapping:
+123 → /var/www/images/user123.png
+
+Or enforce canonical path validation:
+canonical_path = realpath(base_dir + user_input)
+
+if not canonical_path.startswith(base_dir):
+    reject
+This ensures that after filesystem normalization the path is still inside the allowed directory.
+
+Question 2
+Why do double encoding and unicode tricks bypass path traversal filters?
+Suppose a developer blocks:
+../
+Attacker sends:
+..%2f
+The developer checks the raw string and does not see ../.
+But later the framework performs URL decoding:
+%2f → /
+Result:
+../
+Now traversal works.
+
+The more dangerous case: double decoding
+Attacker sends:
+..%252f
+Processing chain:
+Input: ..%252f
+Proxy decoding → ..%2f
+Application decoding → ../
+The developer validated before decoding, but the OS accessed after decoding.
+
+Another bypass uses UTF encoding tricks historically seen in IIS:
+..%c0%af
+Where %c0%af gets interpreted as /.
+
+The deeper lesson:
+security validation must occur after canonicalization.
+
+Proper process:
+1. Decode input
+2. Normalize path
+3. Validate directory boundary
+Never validate the raw string.
+
+Question 3
+How can path traversal lead to Remote Code Execution instead of just file reading?
+Many people think path traversal only exposes files like:
+/etc/passwd
+But in real systems it often leads to code execution.
+Example architecture:
+Browser
+   ↓
+Web Server
+   ↓
+Application
+   ↓
+Template Loader
+   ↓
+Filesystem
+
+Suppose the application loads templates dynamically.
+Example request:
+GET /page?template=home.html
+Code:
+render("templates/" + template)
+Attacker supplies:
+../../uploads/shell
+
+If the uploads directory contains attacker-controlled files:
+uploads/shell.html
+The server loads and executes that template.
+Now the attacker has server-side execution.
+
+Another common chain:
+Path traversal → read secrets
+Example:
+../../.env
+../../config.yaml
+../../aws_credentials
+Then attacker extracts:
+DB_PASSWORD
+AWS_ACCESS_KEY
+JWT_SECRET
+Which leads to:
+Database takeover
+Cloud compromise
+Token forgery
+This is why path traversal is often the first step in a larger attack chain.
+
+Question 4
+Why do containerized environments still suffer from path traversal attacks?
+A common misconception is:
+Docker container = safe filesystem
+But path traversal still works inside the container boundary.
+Example container filesystem:
+/
+├── app
+├── config
+├── secrets
+└── logs
+
+Application exposes file download endpoint:
+GET /download?file=report.pdf
+Code:
+/app/files/ + file
+Attacker sends:
+../../config/secrets.yaml
+
+Even though the container is isolated from the host OS, the attacker can still access sensitive files within the container:
+/config/secrets.yaml
+/service-account-token
+/database credentials
+
+In Kubernetes environments, path traversal can expose:
+/var/run/secrets/kubernetes.io/serviceaccount/token
+
+Which leads to:
+Kubernetes API access
+cluster compromise
+So containers limit blast radius, but do not eliminate path traversal risk.
+
+Question 5
+Why are archive extraction features vulnerable to path traversal (Zip Slip)?
+This is a famous vulnerability pattern called Zip Slip.
+Zip Slip is path traversal during archive extraction.
+
+Instead of attacking a web request, the attacker attacks the file extraction logic.
+
+Let’s walk through a real scenario.
+
+Normal archive extraction
+
+User uploads a ZIP file.
+
+Example archive:
+
+photos.zip
+ ├── image1.jpg
+ ├── image2.jpg
+
+Server extracts it:
+
+/uploads/image1.jpg
+/uploads/image2.jpg
+Malicious archive
+
+The attacker crafts a ZIP with a special filename:
+
+evil.zip
+ ├── ../../../../etc/passwd
+
+ZIP files allow arbitrary filenames, including traversal sequences.
+
+Vulnerable extraction code
+
+Many developers write something like:
+
+for file in zip:
+    path = "/uploads/" + file.name
+    write(path)
+
+If the ZIP entry is:
+
+../../../../etc/passwd
+
+the path becomes:
+
+/uploads/../../../../etc/passwd
+
+After OS normalization:
+
+/etc/passwd
+
+Now the extraction overwrites a system file.
+
+Visualizing the attack
+Attacker
+   │
+   │ uploads malicious zip
+   ▼
+
+Server
+   │
+   │ Extract archive
+   ▼
+
+/uploads/../../../../etc/passwd
+   │
+   ▼
+
+Filesystem resolves path
+   │
+   ▼
+
+/etc/passwd  ← overwritten
+Real consequences
+
+Zip Slip has led to:
+
+Remote code execution
+Configuration overwrite
+SSH key injection
+
+Example:
+
+Malicious ZIP entry:
+
+../../.ssh/authorized_keys
+
+When extracted, it writes attacker’s SSH key.
+
+Now attacker logs in via SSH.
+
+Proper defense
+
+Always validate the final path before writing files.
+
+Secure extraction pattern:
+
+canonical = realpath(upload_dir + entry.name)
+
+if not canonical.startswith(upload_dir):
+    reject
+
+This ensures files cannot escape the upload directory.
+
+Question 6
+Why does URL encoding often bypass Path Traversal filters?
+A very common defensive mistake is filtering the string ../ directly.
+For example, a developer writes validation like this:
+if "../" in filename:
+    reject()
+
+At first glance this seems safe. If the attacker sends:
+../../etc/passwd
+the request is blocked.
+
+But web servers decode URL-encoded characters before processing them.
+Attackers exploit this behavior by encoding traversal characters.
+Example request:
+GET /download?file=%2e%2e%2f%2e%2e%2fetc/passwd
+Encoded characters:
+%2e = .
+%2f = /
+After decoding, the server interprets it as:
+../../etc/passwd
+So the filter sees:
+%2e%2e%2f
+but the filesystem receives:
+../
+
+Why this happens internally?
+The request processing pipeline typically looks like this:
+HTTP Request
+     │
+     ▼
+Web Server
+     │
+     ▼
+URL Decoding
+     │
+     ▼
+Application Logic
+     │
+     ▼
+Filesystem Access
+
+If validation happens before decoding, the attacker wins.
+
+Even worse, some systems decode multiple times.
+Example:
+%252e%252e%252f
+First decode:
+%2e%2e%2f
+Second decode:
+../
+This is called double encoding traversal bypass.
+
+Proper defense:
+Never rely on string filtering.
+Instead:
+1. Normalize the path
+2. Resolve canonical path
+3. Verify directory boundary
+
+Example logic:
+resolved = realpath(base_dir + user_input)
+if not resolved.startswith(base_dir):
+    reject
+
+This ensures traversal sequences cannot escape the intended directory.
+
+Question 7
+Why is Path Traversal common in image processing or document preview services?
+Modern applications often provide preview functionality.
+Example:
+GET /image?name=profile.jpg
+Server code:
+open("/var/images/" + name)
+Attackers can send:
+../../../../etc/passwd
+
+But there is a more subtle case.
+Some systems allow remote file loading.
+Example:
+GET /fetch?url=http://example.com/image.png
+If the backend downloads the file and stores it locally, attackers might manipulate the filename.
+
+Example response header:
+Content-Disposition: filename=../../../../config.yml
+
+If the server trusts the filename from the remote source, it writes files outside the intended directory.
+This creates a hybrid vulnerability combining:
+SSRF
++
+Path Traversal
+
+Which may overwrite sensitive configuration files.
+
+The mental model that makes Path Traversal easy to remember
+Whenever you see user input influencing filesystem paths, think of this flow:
+User Input
+     │
+     ▼
+Application concatenates path
+     │
+     ▼
+Filesystem normalization
+     │
+     ▼
+Directory boundary escape
+     │
+     ▼
+Sensitive file read/write
+
+The key defense principle is:
+Never trust path input
+Always verify canonical path
+Restrict filesystem boundaries
+Use indirect references
+
+
+Use Cases:
+
+1️⃣ Path Traversal → Configuration Leak → Database Compromise
+Architecture
+User Browser
+     │
+     ▼
+Web Application
+     │
+     ▼
+File Download Endpoint
+GET /download?file=report.pdf
+     │
+     ▼
+Application Code
+open("/app/reports/" + file)
+     │
+     ▼
+Linux Filesystem
+
+Step-by-Step Attack:
+The attacker notices the download endpoint accepts a filename parameter.
+Normal request:
+GET /download?file=report.pdf
+Application code:
+/app/reports/ + report.pdf
+Which becomes:
+/app/reports/report.pdf
+
+Now the attacker attempts traversal:
+GET /download?file=../../config/database.yml
+The final path becomes:
+/app/reports/../../config/database.yml
+When the OS resolves the path:
+/app/reports/../../config/database.yml
+       ↑
+reports/.. → /app
+       ↑
+app/.. → /
+
+Final path:
+/config/database.yml
+
+The file contains:
+DB_HOST
+DB_USER
+DB_PASSWORD
+
+Now the attacker can connect directly to the database.
+
+Full Attack Chain: 
+
+Path Traversal
+      │
+      ▼
+Configuration File Read
+      │
+      ▼
+Database Credentials Leak
+      │
+      ▼
+Direct Database Access
+      │
+      ▼
+Data Breach
+
+Why Architecture Allowed This?
+The system trusted user-controlled filenames to construct filesystem paths.
+Developers assumed users would only request files inside /app/reports.
+
+Mitigation:
+Use indirect file references:
+/download?id=42
+
+Internal mapping:
+42 → /app/reports/report.pdf
+
+Also verify canonical paths.
+
+2️⃣ Path Traversal → Cloud Credential Theft → Cloud Account Compromise
+This is extremely common in modern cloud workloads.
+Architecture:
+Internet User
+     │
+     ▼
+Web API
+     │
+     ▼
+File Preview Service
+GET /preview?file=image.jpg
+     │
+     ▼
+Application Container
+     │
+     ▼
+Container Filesystem
+     │
+     ▼
+Cloud Credentials File
+
+Containers often contain credentials like:
+~/.aws/credentials
+
+Step-by-Step Attack:
+Normal request:
+GET /preview?file=image.jpg
+Server reads:
+/images/image.jpg
+
+Attacker attempts traversal:
+GET /preview?file=../../../../root/.aws/credentials
+OS resolves path:
+/images/../../../../root/.aws/credentials
+
+Final file accessed:
+/root/.aws/credentials
+
+This file contains:
+AWS_ACCESS_KEY
+AWS_SECRET_KEY
+
+The attacker now has cloud API credentials.
+
+Full Attack Chain:
+Path Traversal
+      │
+      ▼
+Cloud Credential File Read
+      │
+      ▼
+AWS API Access
+      │
+      ▼
+Create Compute / Access Storage
+      │
+      ▼
+Cloud Account Compromise
+
+Why This Happens?
+Developers assume containers isolate secrets.
+But containers still expose local files unless access is restricted.
+
+Mitigation:
+Store secrets in:
+environment variables
+secret managers
+short-lived tokens
+Also restrict filesystem access.
+
+3️⃣ Path Traversal → Kubernetes Token Theft → Cluster Takeover
+This is a real modern cloud attack pattern.
+Architecture:
+Internet
+   │
+   ▼
+Microservice API
+   │
+   ▼
+File Reader Endpoint
+   │
+   ▼
+Container Runtime
+   │
+   ▼
+Kubernetes Service Account
+
+Token stored at:
+/var/run/secrets/kubernetes.io/serviceaccount/token
+
+Attack:
+Attacker sends:
+GET /file?name=../../../../var/run/secrets/kubernetes.io/serviceaccount/token
+Application reads the file.
+Response contains:
+Kubernetes API Token
+Attacker now calls the Kubernetes API:
+kubectl --token=<stolen token>
+
+Possible actions:
+create pods
+read secrets
+deploy containers
+
+Full Attack Chain:
+Path Traversal
+      │
+      ▼
+Service Account Token Theft
+      │
+      ▼
+Kubernetes API Access
+      │
+      ▼
+Deploy Malicious Pod
+      │
+      ▼
+Cluster Compromise
+
+Why Architecture Failed?
+Kubernetes automatically mounts service tokens in pods.
+Applications did not restrict filesystem reads.
+
+Mitigation:
+Disable auto-mount tokens when not required:
+automountServiceAccountToken: false
+Also validate file paths strictly.
+
+4️⃣ Path Traversal → Template Injection → Remote Code Execution
+This is a dangerous attack chain interviewers love.
+Architecture:
+User Upload
+    │
+    ▼
+File Upload Endpoint
+    │
+    ▼
+Application saves file
+    │
+    ▼
+Template Engine
+(Jinja2 / Thymeleaf)
+    │
+    ▼
+Web Server
+
+Attack:
+Application stores uploaded files:
+/uploads/<filename>
+
+Attacker uploads:
+../../templates/malicious.html
+
+Application saves file:
+/uploads/../../templates/malicious.html
+
+Resolved path:
+/templates/malicious.html
+
+Template payload:
+{{ system("whoami") }}
+Now when the template engine renders the page:
+Template Engine executes code
+
+Attack Chain:
+Path Traversal
+      │
+      ▼
+File Write
+      │
+      ▼
+Template Injection
+      │
+      ▼
+Remote Code Execution
+
+Why Architecture Failed?
+Upload path relied on user-controlled filenames.
+
+Mitigation:
+Never use user-supplied filenames directly.
+Generate random filenames:
+uuid4()
+
+5️⃣ Path Traversal → Log Poisoning → Code Execution
+Another powerful chain.
+
+Architecture:
+User Request
+     │
+     ▼
+Web Server
+     │
+     ▼
+Application Logs Request
+     │
+     ▼
+Log Files
+/var/log/app.log
+
+Step-by-Step Attack:
+Attacker sends malicious input:
+User-Agent: <?php system($_GET['cmd']); ?>
+This gets stored in logs.
+
+Next attacker uses traversal:
+GET /download?file=../../../../var/log/app.log
+
+If the application processes log files dynamically (for debugging dashboards), the malicious code executes.
+
+Attack Chain:
+Log Injection
+      │
+      ▼
+Path Traversal
+      │
+      ▼
+Log File Inclusion
+      │
+      ▼
+Remote Code Execution
+
+The Mental Model That Helps in Interviews
+Whenever you hear Path Traversal, think in this chain:
+User Input
+    │
+    ▼
+Filesystem Path Construction
+    │
+    ▼
+Directory Escape
+    │
+    ▼
+Sensitive File Access
+    │
+    ▼
+Privilege Escalation
+
+And always ask:
+What secrets exist on disk?
+What credentials exist on disk?
+What runtime tokens exist on disk?
+
+Because traversal usually leads to:
+Credential Theft
+Token Theft
+Configuration Leak
+Code Execution
