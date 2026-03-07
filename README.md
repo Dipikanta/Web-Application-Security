@@ -53,6 +53,40 @@ Each topic is intentionally written to explain **why something is insecure**, no
 
 ---
 
+Topics Covered:
+
+Identity & Session:
+	• Broken Authentication
+	• Session fixation
+	• Session hijacking
+	• Token theft (JWT misuse)
+	• OAuth misconfiguration
+	• SSO abuse
+Authorization:
+	• IDOR (Broken Object Level Authorization)
+	• Horizontal privilege escalation
+	• Vertical privilege escalation
+	• Mass assignment
+	• Missing function-level access control
+Injection:
+	• SQL injection
+	• NoSQL injection
+	• OS command injection
+	• Template injection
+	• SSRF (especially cloud metadata abuse)
+Browser-Based:
+	• XSS (stored, reflected, DOM)
+	• CSRF
+	• Clickjacking
+	• CORS misconfiguration
+File & Deserialization:
+	• Insecure file upload
+	• Path traversal
+	• Insecure deserialization
+	• XXE
+
+---
+
 ## Maintained By
 
 Dipikanta Dutta  
