@@ -62,23 +62,27 @@ Identity & Session:
 	• Token theft (JWT misuse)
 	• OAuth misconfiguration
 	• SSO abuse
+	
 Authorization:
 	• IDOR (Broken Object Level Authorization)
 	• Horizontal privilege escalation
 	• Vertical privilege escalation
 	• Mass assignment
 	• Missing function-level access control
+	
 Injection:
 	• SQL injection
 	• NoSQL injection
 	• OS command injection
 	• Template injection
 	• SSRF (especially cloud metadata abuse)
+	
 Browser-Based:
 	• XSS (stored, reflected, DOM)
 	• CSRF
 	• Clickjacking
 	• CORS misconfiguration
+	
 File & Deserialization:
 	• Insecure file upload
 	• Path traversal
