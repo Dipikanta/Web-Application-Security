@@ -111,4 +111,101 @@ The state should be:
 -> Key Insight:
 The state parameter prevents cross-site request forgery in OAuth flows.
 
+3. Why is the Implicit Flow considered insecure today?
+Older OAuth systems used implicit flow.
+Example:
+response_type=token
 
+Instead of returning an authorization code, the authorization server returns the token directly.
+https://app.example.com/callback#access_token=TOKEN
+
+The token appears in the URL fragment.
+
+-> Why This Was Designed:
+Implicit flow was created for JavaScript applications that couldn't safely store client secrets.
+
+-> Why It Became Dangerous:-
+Tokens exposed in URLs create several leak points.
+Example:
+https://app.example.com/#access_token=XYZ
+This token can leak through:
+Browser history
+Referrer headers
+Logs
+Malicious JavaScript
+Third-party scripts
+
+-> Real Attack Scenario:
+•  User logs into an application.
+•  The page loads third-party analytics:
+<script src="analytics.js">
+•  If analytics logs URLs, the token gets captured.
+
+-> Modern Solution:
+OAuth now recommends:
+Authorization Code Flow + PKCE
+
+PKCE prevents code interception.
+Flow:
+Browser
+   │
+   ▼
+Authorization Server
+   │
+   ▼
+Return Authorization Code
+   │
+   ▼
+App exchanges code with PKCE verifier
+
+Even if code is stolen, attacker cannot exchange it.
+
+-> Key Insight:-
+Implicit flow was replaced because tokens should never travel in browser URLs.
+
+4. Why is ID Token validation often implemented incorrectly?
+OIDC adds identity on top of OAuth 2.0.
+The identity information comes in an ID Token, which is a JSON Web Token.
+Example ID token:
+header.payload.signature
+
+Payload:
+{
+ "iss": "https://auth.example.com",
+ "aud": "client123",
+ "exp": 1712345678,
+ "sub": "user123"
+}
+
+-> Common Developer Mistake:-
+Developers only decode the JWT.
+Example:
+const user = decode(id_token)
+They trust the payload.
+But they never verify the signature.
+
+-> Attack Scenario:-
+Attacker creates fake token:
+{
+ "sub": "admin",
+ "aud": "client123"
+}
+Signs it with their own key.
+If the app does not verify the signature, the attacker becomes admin.
+
+-> Correct Token Validation:-
+Applications must validate:
+signature
+issuer
+audience
+expiration
+nonce
+
+Example checks:
+iss == trusted issuer
+aud == application client id
+exp > current time
+
+Key Insight:- 
+JWT decoding ≠ JWT validation.
+The signature verification is what makes the token trustworthy.
