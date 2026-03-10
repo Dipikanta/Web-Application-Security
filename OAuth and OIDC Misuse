@@ -209,3 +209,434 @@ exp > current time
 Key Insight:- 
 JWT decoding ≠ JWT validation.
 The signature verification is what makes the token trustworthy.
+
+5. Why is OAuth token leakage via Referer headers a real risk?
+a. First understand what a Referer header actually is:-
+Whenever a browser loads a new resource (image, script, CSS, iframe, etc.), it sends the URL of the page that initiated the request.
+Example:
+You are on this page:
+https://app.example.com/profile
+The page loads an image:
+<img src="https://cdn.images.com/logo.png">
+
+When the browser requests the image, it automatically sends:
+GET /logo.png
+Host: cdn.images.com
+Referer: https://app.example.com/profile
+
+So the server hosting the image learns which page the user was visiting.
+This is normal browser behavior used for analytics, security checks, and logging.
+
+b. Now look at the OAuth callback URL:-
+After login using OAuth 2.0, the authorization server redirects the user back to the application.
+Example callback URL:
+https://app.example.com/callback?code=AUTH_CODE
+
+Important part:
+?code=AUTH_CODE
+
+This authorization code is sensitive because it can be exchanged for tokens.
+
+c. What happens when the callback page loads:-
+When the callback page loads, the browser renders the page.
+The page may load many external resources:
+<script src="https://analytics.com/script.js"></script>
+<img src="https://cdn.images.com/logo.png">
+<link href="https://fonts.googleapis.com/css">
+
+Now the browser requests these resources.
+
+d. The browser automatically sends the Referer:-
+When requesting the analytics script:
+GET /script.js
+Host: analytics.com
+Referer: https://app.example.com/callback?code=AUTH_CODE
+Now the third-party server receives the entire callback URL, including:
+code=AUTH_CODE
+
+This means the authorization code has leaked to another domain.
+
+-> Why this becomes a security issue:
+If the external domain is malicious (or compromised), it can capture the code.
+Example log on attacker server:
+Referer:
+https://app.example.com/callback?code=AUTH_CODE
+Now the attacker takes that code and sends a request to the OAuth token endpoint:
+POST /token
+grant_type=authorization_code
+code=AUTH_CODE
+client_id=app
+
+If the app does not use PKCE, the attacker can obtain the access token.
+
+-> Why This Is Dangerous?
+If the attacker controls the third-party domain, they can capture codes.
+They then exchange the code for tokens.
+
+-> Mitigation:
+i. Use PKCE : Even if the attacker steals the code, they cannot exchange it without the code verifier.
+PKCE flow:
+code + code_verifier required
+The attacker only has the code.
+ii. Remove the code immediately.
+Applications often do:
+/callback?code=AUTH_CODE
+Then immediately redirect to:
+/dashboard
+So the code disappears from the URL.
+iii. Referrer Policy:
+Websites can instruct the browser not to send the full URL.
+Example header:
+Referrer-Policy: no-referrer
+or
+Referrer-Policy: origin
+Now the browser sends:
+Referer: https://app.example.com
+instead of the full URL.
+
+6. Why is mixing ID Tokens and Access Tokens a serious OIDC security mistake?
+Why is it dangerous if an application uses an ID token to authorize API requests?
+Many engineers confuse authentication and authorization here.
+Step 1 — Understand the purpose of each token:
+In OpenID Connect, two main tokens exist.
+-> ID Token:
+Purpose: authentication
+It tells the client application:
+This user has successfully logged in
+Example payload:
+{
+ "sub": "user123",
+ "email": "user@example.com",
+ "iss": "https://auth.company.com",
+ "aud": "web-client"
+}
+It proves identity.
+
+-> Access Token:
+Purpose: authorization
+It tells APIs:
+This client is allowed to access resources
+Example:
+{
+ "scope": "payments.read",
+ "aud": "payments-api"
+}
+
+Step 2 — The common developer mistake:
+Developers sometimes send the ID token to APIs instead of the access token.
+Example API request:
+GET /api/payments
+Authorization: Bearer ID_TOKEN
+This happens because ID tokens are JWTs containing user info, which looks convenient.
+
+Step 3 — Why this becomes dangerous:
+ID tokens are issued for the client application, not the API.
+So the audience field might be:
+aud = web-client
+But the API never checks this properly.
+An attacker can obtain an ID token from another client.
+Example:
+client A -> gets ID token
+client B API accepts it
+This breaks token audience isolation.
+
+Step 4 — Real attack scenario:
+User
+ │
+ ▼
+Login via Client A
+ │
+ ▼
+Receives ID token (aud=clientA)
+ │
+ ▼
+Attacker sends token to Client B API
+
+If the API does not check the aud claim, it accepts the request.
+Now the attacker can access protected APIs.
+
+-> Correct mitigation:
+APIs must:
+• accept only access tokens
+• validate aud claim
+• verify issuer
+• validate scope
+Never use ID tokens for API authorization.
+
+7. Why is the nonce parameter critical in OpenID Connect?
+Step 1 — Understand what nonce does:
+OIDC adds identity verification to OAuth.
+During login the client sends:
+/authorize?
+client_id=123
+nonce=abc123
+
+The authorization server embeds the nonce in the ID token.
+Example:
+{
+ "sub": "user123",
+ "nonce": "abc123"
+}
+
+Step 2 — Why this matters:
+The client must check:
+returned_nonce == original_nonce
+This prevents token replay attacks.
+
+Step 3 — Attack scenario:
+Imagine the attacker previously obtained a valid ID token:
+ID_TOKEN for user123
+Without nonce validation, the attacker can reuse it.
+Attacker -> sends old ID token
+Application -> accepts it
+Now the attacker logs in as the victim.
+
+Step 4 — Why developers forget this:
+Developers think:
+JWT signature validation is enough
+But JWT validation does not prevent replay.
+Nonce binds the token to a specific authentication request.
+
+->Correct mitigation:-
+Clients must verify:
+nonce
+issuer
+audience
+expiration
+signature
+
+8. Why is the audience claim critical for API security?
+This question tests token confusion attacks.
+Step 1 — OAuth tokens can target different services
+Large companies often have multiple APIs.
+Example architecture:
+Auth Server
+   │
+   ├── Payments API
+   ├── Profile API
+   └── Admin API
+
+Each API expects tokens meant for it.
+Example token:
+aud = payments-api
+
+Step 2 — Misconfiguration
+Some APIs validate only:
+signature
+issuer
+But ignore audience.
+
+Step 3 — Attack
+Attacker obtains token for a less privileged API.
+aud = profile-api
+Then sends it to another API.
+GET /admin/deleteUser
+Authorization: Bearer profile-token
+
+If the admin API ignores the aud claim, it accepts the request.
+Result:
+Privilege escalation across services.
+This is called token substitution attack.
+
+-> Correct mitigation:
+APIs must validate:
+aud == expected API
+Each API must reject tokens meant for other services.
+
+9. What is the OAuth “confused deputy problem”?
+The idea:
+A confused deputy is a trusted service tricked into misusing its privileges.
+In OAuth this happens when:
+Client app uses attacker-controlled tokens
+
+-> Example architecture:
+User
+ │
+ ▼
+Client Application
+ │
+ ▼
+API
+
+The client receives tokens and calls APIs.
+
+-> Attack scenario:
+Attacker authenticates with their account and obtains:
+access_token_attacker
+Then they send this token to the victim’s browser through a crafted link.
+The victim’s browser sends the request:
+Authorization: Bearer attacker_token
+Now the client app unknowingly uses the attacker’s token.
+The system becomes confused about whose identity is actually being used.
+
+-> Why this matters?
+Data gets stored or actions executed under the wrong identity.
+Example:
+Victim uploads sensitive documents.
+They get stored in attacker’s account.
+
+->Mitigation:-
+• Applications must bind tokens to:
+	user session
+	client identity
+	state parameter
+• Tokens should never be blindly accepted from the browser.
+
+10. Why is dynamic client registration risky?
+OAuth allows dynamic client registration.
+a) First understand what a “client” means in OAuth:
+In OAuth terminology, a client is simply an application that wants users to log in through the identity provider.
+Example:
+User
+ │
+ ▼
+Application (OAuth Client)
+ │
+ ▼
+Authorization Server
+
+Examples of clients:
+• a web application
+• a mobile app
+• a SaaS integration
+• a third-party plugin
+
+Before a client can use OAuth, it must register with the authorization server.
+During registration the client gets:
+client_id
+client_secret
+And it must provide a redirect URI.
+
+Example registration:
+Client Name: PhotoApp
+Redirect URI: https://photoapp.com/oauth/callback
+
+b) What happens in normal (safe) client registration:
+In most companies the registration is manual.
+Example:
+Developer requests OAuth access
+        │
+        ▼
+Admin approves
+        │
+        ▼
+Client registered
+So the identity provider knows who the client is.
+
+c) What dynamic client registration means:
+Dynamic registration means clients can register automatically through an API.
+Instead of an admin approving it, a client simply calls:
+POST /register
+Example request:
+{
+ "client_name": "MyApp",
+ "redirect_uris": ["https://myapp.com/callback"]
+}
+The authorization server automatically creates:
+client_id = xyz123
+client_secret = abc987
+Now the client can immediately use OAuth.
+This feature was created to support automated integrations and SaaS ecosystems.
+
+d) Why this becomes dangerous:
+If anyone on the internet can register clients, attackers can create malicious OAuth applications.
+Example attacker registration:
+client_name = Google Login Helper
+redirect_uri = https://evil.com/callback
+The authorization server will happily create the client.
+client_id = attacker123
+The Identity Provider now trusts this client.
+
+e) Now the attacker abuses OAuth login:
+Instead of an application triggering OAuth, the attacker just builds the URL themselves.
+The attacker sends a phishing link:
+Example phishing message:
+
+Security update required.
+Please login to verify your account:
+https://auth.company.com/authorize?client_id=attacker123
+
+The victim clicks the link.
+The victim’s browser opens:
+auth.company.com
+This is the real company identity provider.
+So the victim sees the legitimate login page from the legitimate identity provider.
+. Company Login Portal
+. Username
+. Password
+The victim thinks:"This is my company's login page.".
+So the victim logs in with Company Account.
+Everything looks normal.
+
+f) What happens after login:
+After authentication the authorization server sends the authorization code to the registered redirect URI.
+But that redirect URI belongs to the attacker.
+https://evil.com/callback?code=AUTH_CODE
+Now the attacker receives the authorization code.
+
+g) The attacker exchanges the code for tokens
+The attacker sends:
+POST /token
+grant_type=authorization_code
+code=AUTH_CODE
+client_id=attacker123
+
+Now the attacker receives
+access_token
+id_token
+The victim has unknowingly granted access.
+
+-> Why this fools users easily:
+The victim sees:
+accounts.company.com
+This is the real identity provider.
+So they trust it.
+They don't realize the OAuth client is malicious.
+
+-> Why large companies restrict this?
+Companies heavily restrict client registration.
+They require:
+• app verification
+• domain ownership checks
+• security review
+• restricted scopes
+Without this, OAuth becomes a phishing platform.
+
+-> How systems mitigate this risk:
+Secure systems implement controls like:
+• Restricted registration
+• Only trusted developers can create clients.
+• Redirect URI validation
+• Domains must be verified.
+• User consent screens
+• Users see exactly which app is requesting access.
+Example:
+PhotoApp wants to access your profile
+App verification
+Identity providers review apps before allowing sensitive scopes.
+
+
+-> The Big Mental Model for OAuth / OIDC Misuse:
+Most OAuth vulnerabilities fall into five core categories:
+1. Redirect manipulation:
+Token/code leakage through redirects.
+2. Token misuse:
+Using ID tokens where access tokens should be used.
+3. Token validation failures:
+Missing validation of:
+aud
+iss
+exp
+nonce
+signature
+4. Browser-based leaks:
+Sensitive data exposed via:
+URLs
+referer headers
+logs
+5. Protocol confusion:
+Mixing identities, tokens, or clients.
+
+• Most OAuth and OIDC vulnerabilities occur when applications treat tokens as simple credentials rather than verifying their intended audience, context, and binding to the original authentication request.
+
+
