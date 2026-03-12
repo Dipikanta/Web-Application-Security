@@ -402,8 +402,8 @@ Use indirect references
 
 Use Cases:
 
-1️⃣ Path Traversal → Configuration Leak → Database Compromise
-Architecture
+1️⃣ Path Traversal → Configuration Leak → Database Compromise:
+Architecture:
 User Browser
      │
      ▼
@@ -420,7 +420,7 @@ open("/app/reports/" + file)
      ▼
 Linux Filesystem
 
-Step-by-Step Attack:
+-> Step-by-Step Attack:
 The attacker notices the download endpoint accepts a filename parameter.
 Normal request:
 GET /download?file=report.pdf
@@ -450,8 +450,7 @@ DB_PASSWORD
 
 Now the attacker can connect directly to the database.
 
-Full Attack Chain: 
-
+-> Full Attack Chain: 
 Path Traversal
       │
       ▼
@@ -466,11 +465,11 @@ Direct Database Access
       ▼
 Data Breach
 
-Why Architecture Allowed This?
+-> Why Architecture Allowed This?
 The system trusted user-controlled filenames to construct filesystem paths.
 Developers assumed users would only request files inside /app/reports.
 
-Mitigation:
+-> Mitigation:
 Use indirect file references:
 /download?id=42
 
