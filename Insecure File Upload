@@ -170,3 +170,79 @@ Server stores file
 Server or user processes file
 
 If any step trusts the file too much, the attacker can exploit it.
+
+6. How do you know if a directory is executable?
+This depends on server configuration, not just the directory name.
+Common indicators include:
+a. Script interpreters enabled
+Example for PHP:
+AddHandler application/x-httpd-php .php
+This tells the server:
+Execute .php files
+
+b. Application runtime directories
+These usually execute scripts:
+/var/www/html/
+/srv/www/
+/usr/share/nginx/html/
+
+c. Framework deployment paths
+Examples:
+Node.js → /app
+Django → /var/www/project
+Java → /tomcat/webapps
+
+7. Why uploads should never go inside application directories?
+Bad architecture:
+/var/www/html/uploads/
+Because .php execution may be enabled here.
+
+Safer architecture:
+/opt/app/
+/opt/uploads/
+/opt/static/
+
+Uploads stored outside the web root.
+Then served through a separate mechanism.
+
+Example secure pattern:
+Application server
+       │
+       ▼
+Upload stored in storage service
+       │
+       ▼
+Served via static file server or CDN
+
+-> Common storage services include:
+Amazon S3
+Google Cloud Storage
+
+These services store files as data, not executable scripts.
+
+
+Use Cases:
+
+
+
+
+-> Why insecure file upload is so dangerous:
+Because it can lead to multiple types of attacks depending on the system architecture.
+• Upload → stored in executable path → Remote Code Execution
+• Upload → processed by vulnerable library → Server compromise
+• Upload → served to users → Stored XSS
+
+This is why the vulnerability is so commonly exploited in real systems.
+
+-> A mental model that helps remember this:
+Whenever you see file upload in threat modeling, ask three questions:
+1. Where is the file stored?
+2. Who processes the file?
+3. Who opens the file later?
+Each of these stages introduces a different risk.
+-> Whenever you see file upload, ask:
+Where is the file stored?
+If the answer is: Inside web server document root
+then there is potential risk.
+Because:
+URL → server → filesystem → script execution
