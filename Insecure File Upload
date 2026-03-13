@@ -223,8 +223,176 @@ These services store files as data, not executable scripts.
 
 Use Cases:
 
+1. Double Extension Bypass:
+Many applications validate uploads like this:
+Allow only files ending with:
+.jpg
+.png
+.gif
+The developer checks the last extension of the filename.
+But attackers can upload:
+shell.php.jpg
+At first glance the system sees:
+.jpg
+so it allows the file.
+However, depending on how the server processes files, the real extension may still be interpreted as .php.
 
+-> Attack flow:
+Attacker uploads shell.php.jpg
+        ↓
+Server stores file
+        ↓
+Server interprets .php part
+        ↓
+PHP interpreter executes code
 
+Some misconfigured servers treat any filename containing .php as executable.
+So the attacker gets code execution.
+
+2. Null Byte Injection:
+This was historically one of the most powerful bypasses.
+Example filename:
+shell.php%00.jpg
+%00 represents a null byte, which terminates strings in many C-based systems.
+So the application validation sees:
+shell.php%00.jpg
+and thinks the extension is:
+.jpg
+But the underlying system may interpret it as:
+shell.php
+because the null byte terminates the string.
+Even though modern frameworks fixed this, interviewers ask this question because it shows understanding of low-level string parsing.
+
+3. MIME-Type Spoofing:
+When browsers upload files they include a header:
+Content-Type: image/jpeg
+Developers sometimes trust this header.
+But the header is fully controlled by the client.
+Attackers modify it using tools like Burp Suite.
+Example request:
+POST /upload
+file=shell.php
+Content-Type: image/jpeg
+The application believes it received an image.
+But the file actually contains:
+<?php system($_GET['cmd']); ?>
+This works because HTTP headers are not trustworthy for validation.
+
+4. Magic Byte Forgery:
+Better systems validate file signatures, also called magic bytes.
+Example:
+JPEG files start with:
+FF D8 FF
+PNG files start with:
+89 50 4E 47
+Attackers bypass this by embedding these bytes at the beginning of a malicious file.
+Example structure:
+FF D8 FF
+<?php system($_GET['cmd']); ?>
+Now the file looks like a valid JPEG to simple validators.
+But when the server interprets the file as PHP, the code executes.
+This works because many validators only check the first few bytes.
+
+5. Polyglot Files:
+A polyglot file is a file that is valid in two formats simultaneously.
+For example:
+Valid JPEG image
++
+Embedded PHP script
+
+-> Structure:
+JPEG header
+image data
+<?php malicious code ?>
+
+To the image viewer it appears as a normal image.
+But to the PHP interpreter it contains executable code.
+This technique bypasses:
+• extension checks
+• MIME checks
+• file signature checks
+Because the file is technically valid in both formats.
+
+6. Case Sensitivity Bypass:
+Some systems validate extensions like:
+if extension == ".php"
+But file systems may treat uppercase differently.
+Attackers upload:
+shell.PHP
+shell.PhP
+shell.pHp
+If validation is case-sensitive but execution is case-insensitive, the file may still execute.
+Example:
+Validation rejects ".php"
+But allows ".PHP"
+Yet the server still executes .PHP.
+
+7. Directory Traversal During Upload:
+Sometimes the vulnerability is not just the file type but where the file is stored.
+Attackers manipulate the filename like this:
+../../shell.php
+If the application concatenates paths incorrectly:
+/uploads/ + filename
+the resulting path becomes:
+/var/www/uploads/../../shell.php
+Which resolves to:
+/var/www/shell.php
+Now the file lands in the web root, which may be executable.
+This combines file upload with path traversal.
+
+8. Archive Upload Exploits (Zip Slip):
+Some systems allow uploading archives:
+.zip
+.tar
+The server extracts them automatically.
+Attackers craft an archive with paths like:
+../../shell.php
+When the server extracts the archive, the file escapes the intended directory.
+Example extraction:
+Archive entry:
+../../shell.php
+
+Result:
+/var/www/shell.php
+The attacker just uploaded a file outside the intended upload folder.
+This attack is known as Zip Slip.
+
+-> Why these bypasses succeed:
+They exploit different trust boundaries:
+• User-controlled filename
+• User-controlled headers
+• File format ambiguity
+• Parser behavior
+• Server configuration
+• Filesystem behavior
+Developers usually secure only one layer, but attackers exploit another layer.
+
+-> Real-world file upload attack chain:-
+Many incidents combine multiple bypasses:
+
+Attacker uploads polyglot image
+        ↓
+Magic byte validation passes
+        ↓
+File stored in executable directory
+        ↓
+Access file via URL
+        ↓
+PHP interpreter executes payload
+Result: full server compromise.
+
+-> How secure systems prevent these bypasses:-
+Modern architectures prevent these attacks using layered defenses:
+	1. Store uploads outside executable directories.
+	2. Generate random filenames.
+        Example:
+        uploads/9f8c71a2.dat
+	3. Validate file content using deep inspection.
+	4. Strip dangerous metadata.
+	5. Serve files with safe headers.
+        Example:
+        Content-Disposition: attachment
+	6. Process files inside sandboxed environments.
 
 -> Why insecure file upload is so dangerous:
 Because it can lead to multiple types of attacks depending on the system architecture.
