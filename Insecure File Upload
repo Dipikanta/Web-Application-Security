@@ -294,24 +294,153 @@ But when the server interprets the file as PHP, the code executes.
 This works because many validators only check the first few bytes.
 
 5. Polyglot Files:
-A polyglot file is a file that is valid in two formats simultaneously.
-For example:
-Valid JPEG image
-+
-Embedded PHP script
+A polyglot file is a file that is valid in two different formats at the same time.
+For example, the same file can be:
+A valid image
+AND
+A valid script
 
--> Structure:
-JPEG header
-image data
-<?php malicious code ?>
+Both parsers understand it.
+That’s why polyglots are powerful in Unrestricted File Upload attacks.
+
+i. First understand how normal files work:
+Different programs read files differently.
+Example:
+An image viewer reads the file as:
+JPEG structure
+
+A PHP interpreter reads the file as:
+PHP code
+
+Each program only cares about the parts it understands.
+Everything else is ignored.
+
+ii. Key trick behind polyglots:
+Programs do not parse the entire file strictly.
+They usually:
+• Look for a header
+• Process what they understand
+• Ignore the rest
+This means a file can contain two formats layered together.
+
+iii. Example of a JPEG + PHP polyglot:
+A JPEG image begins with a specific signature:
+FF D8 FF
+A malicious polyglot might look like this:
+FF D8 FF
+<image data>
+<?php system($_GET['cmd']); ?>
+
+To an image viewer:
+• Reads JPEG header
+• Displays image
+• Ignores the PHP code
+
+To the PHP interpreter:
+• Ignores the JPEG bytes
+• Executes the PHP code
+
+So the same file behaves as two different file types depending on who reads it.
+
+iv. Why this bypasses upload protections:
+Imagine an application only checks:
+File signature
+
+It verifies:
+Does file start with JPEG magic bytes?
+The answer is yes.
+So the upload is allowed.
+But the file actually contains:
+Executable PHP code
+
+If the server executes .php files, the attacker gets **Remote Code Execution.
+
+v. Real attack scenario:
+Suppose a website allows profile picture uploads.
+The application allows:
+.jpg
+.png
+
+Attacker uploads:
+profile.jpg
+
+But the file actually contains:
+Valid JPEG
++
+PHP webshell
+
+If the file ends up in:
+/var/www/uploads/profile.jpg
+
+and the attacker accesses:
+https://site.com/uploads/profile.jpg
+
+Some misconfigured servers may still pass the file to the **PHP interpreter.
+Then the attacker can run commands like:
+?cmd=id
 
 To the image viewer it appears as a normal image.
 But to the PHP interpreter it contains executable code.
+
 This technique bypasses:
 • extension checks
 • MIME checks
 • file signature checks
 Because the file is technically valid in both formats.
+
+vi. Why this happens technically:
+Three reasons:
+1. File formats allow extra data:
+Many formats allow unused data.
+Example:
+JPEG metadata
+comments
+padding
+
+Attackers hide code there.
+
+2. Parsers ignore unknown sections:
+Programs ignore parts they do not understand.
+
+3. Script interpreters ignore non-code:
+PHP ignores everything outside <?php ?>.
+Example:
+random bytes
+<?php malicious code ?>
+random bytes
+
+Only the PHP block runs.
+
+vii. Famous real-world polyglots:
+Attackers commonly create combinations like:
+JPEG + PHP
+GIF + PHP
+PDF + JavaScript
+ZIP + HTML
+These appear harmless but contain executable payloads.
+
+viii. Why modern systems still worry about polyglots:
+Even if the server doesn't execute them, polyglots can trigger:
+• Stored XSS
+• Image parser vulnerabilities
+• Antivirus bypass
+• Content scanning bypass
+
+ix. How secure systems defend against polyglots:
+Secure architectures usually do multiple things:
+1. Rename uploaded files
+user.jpg → 91ac8f7c.dat
+
+2. Store files outside web root
+/data/uploads/
+
+3. Re-encode images
+Instead of storing the uploaded file, the server:
+Decode image
+Rebuild image
+Save new image
+
+This removes hidden payloads.
 
 6. Case Sensitivity Bypass:
 Some systems validate extensions like:
